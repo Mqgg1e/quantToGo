@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	dfs "goQuant/internal/dataManager"
+	v2 "goQuant/internal/dataManager/v2"
 )
 
 func main() {
@@ -20,8 +20,10 @@ func main() {
 		log.Fatalf("failed to create data directory: %v", err)
 	}
 
+	proxyURL := "http://127.0.0.1:7897"
+
 	// 创建多K线处理器（每个Symbol+Interval使用独立的数据库）
-	processor, err := dfs.NewMultiKlineProcessor(baseDir)
+	processor, err := v2.NewEnhancedMultiKlineProcessor(baseDir, proxyURL)
 	if err != nil {
 		log.Fatalf("failed to create multi processor: %v", err)
 	}
@@ -39,8 +41,6 @@ func main() {
 		{"ETHUSDT", "1m"},
 		{"ETHUSDT", "3m"},
 	}
-
-	proxyURL := "http://127.0.0.1:7897"
 
 	// 创建上下文和信号处理
 	ctx, cancel := context.WithCancel(context.Background())
@@ -87,17 +87,16 @@ func main() {
 }
 
 // processSymbolKlines 处理单个交易对+周期的K线流
-func processSymbolKlines(ctx context.Context, processor *dfs.MultiKlineProcessor, symbol, interval, proxyURL string) {
+func processSymbolKlines(ctx context.Context, processor *v2.EnhancedMultiKlineProcessor, symbol, interval, proxyURL string) {
 	log.Printf("subscribing to %s %s\n", symbol, interval)
 
-	msgCh, errCh, closeFn := dfs.SubscribeKlines(ctx, symbol, interval, proxyURL)
-	defer closeFn()
-
-	processor.ProcessStream(ctx, msgCh, errCh)
+	if err := processor.StartSubscription(ctx, symbol, interval); err != nil {
+		log.Printf("failed to start subscription for %s %s: %v", symbol, interval, err)
+	}
 }
 
 // printStatistics 打印多数据库统计信息
-func printStatistics(processor *dfs.MultiKlineProcessor, subscriptions []struct {
+func printStatistics(processor *v2.EnhancedMultiKlineProcessor, subscriptions []struct {
 	symbol   string
 	interval string
 }) {
@@ -129,7 +128,7 @@ func printStatistics(processor *dfs.MultiKlineProcessor, subscriptions []struct 
 		}
 	}
 
-	fmt.Printf("\nDatabase files created: %d\n", processor.GetStoreCount())
+	fmt.Printf("\nProcessors count: %d\n", processor.GetProcessorCount())
 	fmt.Printf("Total klines stored: %d\n", totalKlines)
 	fmt.Println("====================\n")
 }

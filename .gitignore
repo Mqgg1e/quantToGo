@@ -1,1 +1,28 @@
-data
+# Data directories
+data/
+wsdata/
+*_wsdata/
+
+# Compiled binaries
+/bot
+/basic
+/enhanced
+*.exe
+*.o
+*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+*.test
+*.out
+coverage.out

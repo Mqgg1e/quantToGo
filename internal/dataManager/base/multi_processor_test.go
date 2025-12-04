@@ -1,4 +1,4 @@
-package dataFromWS
+package base
 
 import (
 	"os"
