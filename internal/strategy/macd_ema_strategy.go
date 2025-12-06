@@ -252,7 +252,7 @@ func (s *MACDEMAStrategy) checkScenario1(timestamp time.Time, currentPrice float
 	if s.hasRecentCross(s.macdCrosses, CrossTypeDeath, 3) &&
 		s.hasRecentCross(s.emaVwapCrosses, CrossTypeDeath, 3) {
 
-		// 基础信号：开空单
+		// 生成空单信号
 		signal := NewSignal(core.SignalTypeOpenShort, s.symbol, currentPrice, "MACD死叉+EMA5/VWAP8死叉")
 		signal.Metadata["macd_dif"] = s.prevDIF
 		signal.Metadata["macd_dea"] = s.prevDEA
@@ -260,12 +260,10 @@ func (s *MACDEMAStrategy) checkScenario1(timestamp time.Time, currentPrice float
 		signal.Metadata["vwap8"] = s.prevVWAP8
 		signal.Metadata["ema15"] = s.prevEMA15
 
-		// 检查是否有EMA5/EMA15死叉 → 标记为强信号（可加仓）
-		// 使用 1.0 表示 true, 0.0 表示 false
+		// 检查是否同时满足EMA5/EMA15死叉（加仓条件）
 		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeDeath, 3) {
-			signal.Metadata["strong_signal"] = 1.0
 			signal.Metadata["add_position_eligible"] = 1.0
-			signal.Reason = "MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉(强信号)"
+			signal.Reason = "MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉"
 		}
 
 		return signal
@@ -275,7 +273,7 @@ func (s *MACDEMAStrategy) checkScenario1(timestamp time.Time, currentPrice float
 	if s.hasRecentCross(s.macdCrosses, CrossTypeGolden, 3) &&
 		s.hasRecentCross(s.emaVwapCrosses, CrossTypeGolden, 3) {
 
-		// 基础信号：开多单
+		// 生成多单信号
 		signal := NewSignal(core.SignalTypeOpenLong, s.symbol, currentPrice, "MACD金叉+EMA5/VWAP8金叉")
 		signal.Metadata["macd_dif"] = s.prevDIF
 		signal.Metadata["macd_dea"] = s.prevDEA
@@ -283,12 +281,10 @@ func (s *MACDEMAStrategy) checkScenario1(timestamp time.Time, currentPrice float
 		signal.Metadata["vwap8"] = s.prevVWAP8
 		signal.Metadata["ema15"] = s.prevEMA15
 
-		// 检查是否有EMA5/EMA15金叉 → 标记为强信号（可加仓）
-		// 使用 1.0 表示 true, 0.0 表示 false
+		// 检查是否同时满足EMA5/EMA15金叉（加仓条件）
 		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeGolden, 3) {
-			signal.Metadata["strong_signal"] = 1.0
 			signal.Metadata["add_position_eligible"] = 1.0
-			signal.Reason = "MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(强信号)"
+			signal.Reason = "MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉"
 		}
 
 		return signal

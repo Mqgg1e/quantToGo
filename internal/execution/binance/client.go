@@ -129,6 +129,10 @@ func (c *Client) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*Ord
 		params.Set("reduceOnly", "true")
 	}
 
+	if req.ClosePosition {
+		params.Set("closePosition", "true")
+	}
+
 	if req.StopPrice != "" {
 		params.Set("stopPrice", req.StopPrice)
 	}
@@ -147,6 +151,14 @@ func (c *Client) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*Ord
 
 	if req.ActivationPrice != "" {
 		params.Set("activationPrice", req.ActivationPrice)
+	}
+
+	// 调试：打印止损单参数
+	if req.Type == "STOP_MARKET" {
+		fmt.Printf("[DEBUG] STOP_MARKET Order Parameters:\n")
+		for k, v := range params {
+			fmt.Printf("  %s = %v\n", k, v)
+		}
 	}
 
 	body, err := c.doRequest(ctx, "POST", "/fapi/v1/order", params, true)

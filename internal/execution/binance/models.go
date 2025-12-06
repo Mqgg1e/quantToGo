@@ -90,6 +90,7 @@ type CreateOrderRequest struct {
 	Price            string              `json:"price,omitempty"`            // 价格
 	NewClientOrderId string              `json:"newClientOrderId,omitempty"` // 客户自定义订单ID
 	StopPrice        string              `json:"stopPrice,omitempty"`        // 触发价
+	ClosePosition    bool                `json:"closePosition,omitempty"`    // 平掉全部仓位（用于STOP_MARKET/TAKE_PROFIT_MARKET）
 	ActivationPrice  string              `json:"activationPrice,omitempty"`  // 追踪止损激活价格
 	CallbackRate     string              `json:"callbackRate,omitempty"`     // 追踪止损回调比例
 	WorkingType      WorkingType         `json:"workingType,omitempty"`      // 条件价格触发类型
@@ -274,6 +275,12 @@ func FromOrderType(orderType core.OrderType) FuturesOrderType {
 		return OrderTypeMarket
 	case core.OrderTypeLimit:
 		return OrderTypeLimit
+	case core.OrderTypeStopMarket:
+		return OrderTypeStopMarket
+	case core.OrderTypeStopLimit:
+		return OrderTypeStop // STOP 是限价止损单
+	case core.OrderTypeTakeProfit:
+		return OrderTypeTakeProfitMarket
 	default:
 		return OrderTypeMarket
 	}

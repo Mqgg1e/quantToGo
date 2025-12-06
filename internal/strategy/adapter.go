@@ -139,6 +139,16 @@ func (a *Adapter) executeOrder(ctx context.Context, order *core.Order) error {
 		return fmt.Errorf("risk check failed: %w", err)
 	}
 
+	// 保存原始订单类型信息（用于判断是否需要设置止损）
+	isOpenOrAddOrder := false
+	if order.Metadata != nil {
+		if signalType, ok := order.Metadata["signal_type"].(core.SignalType); ok {
+			if signalType == core.SignalTypeOpenLong || signalType == core.SignalTypeOpenShort {
+				isOpenOrAddOrder = true
+			}
+		}
+	}
+
 	// 提交订单
 	resultOrder, err := a.executor.PlaceOrder(ctx, order)
 	if err != nil {
@@ -155,14 +165,46 @@ func (a *Adapter) executeOrder(ctx context.Context, order *core.Order) error {
 		zap.String("status", string(resultOrder.Status)),
 	)
 
-	// 如果是市价单，等待一下再查询状态
-	if resultOrder.Type == core.OrderTypeMarket {
-		// 简化：实际应该通过WebSocket监听订单状态
-		order, _ := a.executor.GetOrder(ctx, resultOrder.Symbol, resultOrder.ID)
-		if order != nil && order.Status == core.OrderStatusFilled {
+	// 如果是市价单且是开仓/加仓订单，等待成交后设置止损
+	if resultOrder.Type == core.OrderTypeMarket && isOpenOrAddOrder {
+		// 等待订单成交（市价单通常很快成交）
+		time.Sleep(500 * time.Millisecond)
+
+		// 查询订单状态
+		filledOrder, err := a.executor.GetOrder(ctx, resultOrder.Symbol, resultOrder.ID)
+		if err != nil {
+			a.symbolLogger.Warn("Failed to query order status",
+				zap.String("order_id", resultOrder.ID),
+				zap.Error(err),
+			)
+			// 即使查询失败，也尝试设置止损
+		}
+
+		// 检查订单是否成交
+		if filledOrder != nil && filledOrder.Status == core.OrderStatusFilled {
 			a.symbolLogger.Info("Order filled",
-				zap.String("order_id", order.ID),
-				zap.Float64("avg_price", order.AvgPrice),
+				zap.String("order_id", filledOrder.ID),
+				zap.Float64("avg_price", filledOrder.AvgPrice),
+			)
+		}
+
+		// 开仓/加仓订单：设置止损单
+		a.symbolLogger.Info("Setting stop loss after order placed",
+			zap.String("symbol", resultOrder.Symbol),
+		)
+
+		// 先更新持仓，确保仓位管理器有最新数据
+		a.updatePositions(ctx)
+
+		// 设置止损单
+		if err := a.positionMgr.SetStopLoss(ctx, resultOrder.Symbol); err != nil {
+			a.symbolLogger.Error("Failed to set stop loss",
+				zap.String("symbol", resultOrder.Symbol),
+				zap.Error(err),
+			)
+		} else {
+			a.symbolLogger.Info("Stop loss order set successfully",
+				zap.String("symbol", resultOrder.Symbol),
 			)
 		}
 	}
@@ -207,21 +249,42 @@ func (a *Adapter) updatePositions(ctx context.Context) {
 
 // checkRiskManagement 风险管理检查（止损/止盈）
 func (a *Adapter) checkRiskManagement(ctx context.Context, currentPrice float64) {
-	// 这里需要类型断言，因为core.PositionManager接口没有这些方法
-	// 实际使用时需要扩展接口或使用具体类型
+	// 程序内止损监控（作为交易所止损单的后备方案）
+	// 如果 SetStopLoss 设置交易所止损单失败，这里可以作为软件层面的保护
 
-	// 示例：假设positionMgr实现了这些方法
-	// stopLossTriggered, stopLossOrder := a.positionMgr.CheckStopLoss(a.symbol, currentPrice)
-	// if stopLossTriggered && stopLossOrder != nil {
-	//     log.Printf("[%s] 🛑 Stop loss triggered!\n", a.Name())
-	//     a.executeOrder(ctx, stopLossOrder)
-	// }
+	// 类型断言获取具体的 Manager 类型以访问 CheckStopLoss 方法
+	type StopLossChecker interface {
+		CheckStopLoss(symbol string, currentPrice float64) (bool, *core.Order)
+		CheckTrailingStop(symbol string, currentPrice float64) (bool, *core.Order)
+	}
 
-	// trailingStopTriggered, trailingStopOrder := a.positionMgr.CheckTrailingStop(a.symbol, currentPrice)
-	// if trailingStopTriggered && trailingStopOrder != nil {
-	//     log.Printf("[%s] 📉 Trailing stop triggered!\n", a.Name())
-	//     a.executeOrder(ctx, trailingStopOrder)
-	// }
+	if checker, ok := a.positionMgr.(StopLossChecker); ok {
+		// 检查固定止损
+		stopLossTriggered, stopLossOrder := checker.CheckStopLoss(a.symbol, currentPrice)
+		if stopLossTriggered && stopLossOrder != nil {
+			a.symbolLogger.Warn("Stop loss triggered by program monitor",
+				zap.Float64("current_price", currentPrice),
+			)
+			if err := a.executeOrder(ctx, stopLossOrder); err != nil {
+				a.symbolLogger.Error("Failed to execute stop loss order",
+					zap.Error(err),
+				)
+			}
+		}
+
+		// 检查跟踪止盈
+		trailingStopTriggered, trailingStopOrder := checker.CheckTrailingStop(a.symbol, currentPrice)
+		if trailingStopTriggered && trailingStopOrder != nil {
+			a.symbolLogger.Info("Trailing stop triggered",
+				zap.Float64("current_price", currentPrice),
+			)
+			if err := a.executeOrder(ctx, trailingStopOrder); err != nil {
+				a.symbolLogger.Error("Failed to execute trailing stop order",
+					zap.Error(err),
+				)
+			}
+		}
+	}
 }
 
 // SetEnableRiskCheck 设置是否启用风险检查

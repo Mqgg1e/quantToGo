@@ -45,43 +45,60 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 		PositionSide:     PositionSideBoth, // 单向持仓模式
 	}
 
-	// 数量
-	// 如果订单没有设置数量，尝试从Metadata中的usdt_amount计算
-	if order.Quantity == 0 && order.Metadata != nil {
-		if usdtAmount, ok := order.Metadata["usdt_amount"].(float64); ok && usdtAmount > 0 {
-			// 获取当前价格（市价单需要估算）
-			currentPrice := order.Price
-			if currentPrice == 0 {
-				// 对于市价单，使用最新市场价格估算
-				// 简化处理：从持仓风险接口获取标记价格
-				positions, err := e.client.GetPositionRisk(ctx, order.Symbol)
-				if err == nil && len(positions) > 0 {
-					// 解析标记价格
-					if markPrice, parseErr := parseFloat(positions[0].MarkPrice); parseErr == nil && markPrice > 0 {
-						currentPrice = markPrice
-					}
-				}
-			}
+	// 数量处理
+	// 对于 STOP_MARKET/TAKE_PROFIT_MARKET 止损单，如果是平仓，使用 closePosition 而不是 quantity
+	isStopMarketCloseAll := (order.Type == core.OrderTypeStopMarket || order.Type == core.OrderTypeTakeProfit) &&
+		order.Metadata != nil
 
-			// 如果仍然没有价格，返回错误
-			if currentPrice == 0 {
-				return nil, fmt.Errorf("cannot calculate quantity: no price available")
-			}
-
-			// 计算数量：数量 = (USDT金额 * 杠杆) / 价格
-			leverage := float64(order.Leverage)
-			if leverage == 0 {
-				leverage = 1
-			}
-			quantity := (usdtAmount * leverage) / currentPrice
-			order.Quantity = quantity
+	var useClosePosition bool
+	if isStopMarketCloseAll {
+		if reduceOnly, ok := order.Metadata["reduce_only"].(bool); ok && reduceOnly {
+			useClosePosition = true
 		}
 	}
 
-	if order.Quantity > 0 {
-		req.Quantity = formatQuantity(order.Symbol, order.Quantity)
+	if useClosePosition {
+		// STOP_MARKET 平仓：使用 closePosition=true，不发送 quantity
+		req.ClosePosition = true
 	} else {
-		return nil, fmt.Errorf("order quantity is zero or not set")
+		// 其他订单类型：正常处理数量
+		// 如果订单没有设置数量，尝试从Metadata中的usdt_amount计算
+		if order.Quantity == 0 && order.Metadata != nil {
+			if usdtAmount, ok := order.Metadata["usdt_amount"].(float64); ok && usdtAmount > 0 {
+				// 获取当前价格（市价单需要估算）
+				currentPrice := order.Price
+				if currentPrice == 0 {
+					// 对于市价单，使用最新市场价格估算
+					// 简化处理：从持仓风险接口获取标记价格
+					positions, err := e.client.GetPositionRisk(ctx, order.Symbol)
+					if err == nil && len(positions) > 0 {
+						// 解析标记价格
+						if markPrice, parseErr := parseFloat(positions[0].MarkPrice); parseErr == nil && markPrice > 0 {
+							currentPrice = markPrice
+						}
+					}
+				}
+
+				// 如果仍然没有价格，返回错误
+				if currentPrice == 0 {
+					return nil, fmt.Errorf("cannot calculate quantity: no price available")
+				}
+
+				// 计算数量：数量 = (USDT金额 * 杠杆) / 价格
+				leverage := float64(order.Leverage)
+				if leverage == 0 {
+					leverage = 1
+				}
+				quantity := (usdtAmount * leverage) / currentPrice
+				order.Quantity = quantity
+			}
+		}
+
+		if order.Quantity > 0 {
+			req.Quantity = formatQuantity(order.Symbol, order.Quantity)
+		} else {
+			return nil, fmt.Errorf("order quantity is zero or not set")
+		}
 	}
 
 	// 基本风险检查：验证数量和杠杆
@@ -98,14 +115,16 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 		req.TimeInForce = TimeInForceGTC
 	}
 
-	// 止损价（止损单）
-	if order.StopPrice > 0 {
+	// 止损单：STOP_MARKET 只需要 stopPrice
+	if order.Type == core.OrderTypeStopMarket && order.StopPrice > 0 {
 		req.StopPrice = formatPrice(order.Symbol, order.StopPrice)
-		req.WorkingType = WorkingTypeMark
+		// WorkingType 可能在测试网不支持，先不设置
+		// req.WorkingType = WorkingTypeMark
 	}
 
 	// 只减仓标志（平仓订单）
-	if order.Metadata != nil {
+	// 注意：使用 closePosition 时不能同时设置 reduceOnly
+	if order.Metadata != nil && !useClosePosition {
 		if reduceOnly, ok := order.Metadata["reduce_only"].(bool); ok && reduceOnly {
 			req.ReduceOnly = true
 		}

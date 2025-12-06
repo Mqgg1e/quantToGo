@@ -1,3 +1,188 @@
+## ! 修改记录写在 docs/CHANGELOG.md 中，如果代码有修改docs/API_REFERENCE.md也要配套修改，其他记录写在docs/README.md和docs/USER_GUIDE.md里，主要问题和需求在docs/plansAndProgressV1.md，不允许再创建其他md文件
+## ! 在docs/plansAndProgressV1.md问题下方的两个####内给出简短回复
+## ! 完成后不可以再创建md文件
+
+
+
+
+### 061225
+
+### 0900
+1.报错
+(base) maeda@maeda89:~/Documents/projects/goQuant$ ./scripts/start-live.sh
+=========================================
+goQuant Live Trading Bot
+=========================================
+
+✅ Config file found
+
+🔨 Building...
+# goQuant/internal/execution/binance
+internal/execution/binance/models.go:281:10: undefined: OrderTypeStopLimit
+
+####
+**问题**：Binance 常量命名错误，`OrderTypeStopLimit` 未定义
+
+**修复**：Binance 的限价止损单常量名是 `OrderTypeStop`（不是 `OrderTypeStopLimit`）
+- `core.OrderTypeStopLimit` → `OrderTypeStop` (Binance "STOP")
+- 已修正 `FromOrderType` 函数中的映射
+
+**修改文件**：`internal/execution/binance/models.go`
+
+**编译成功**，可以重启测试
+####
+
+
+### 0817
+1.现在的错误变了
+2025-12-06T08:18:00.821Z        INFO    position/manager.go:335 Calculated order quantity       {"quantity": 0.014388787200706056, "usdt_amount": 257.6741134145, "leverage": 5, "price": 89539.9}
+2025-12-06T08:18:01.582Z        INFO    position/manager.go:548 Setting stop loss order {"symbol": "BTCUSDT", "side": "SELL", "quantity": 0.029, "stop_price": 89012.58734666998, "entry_price": 89545.1, "stop_loss_percent": 0.6}
+2025-12-06T08:18:01.663Z        ERROR   strategy/adapter.go:201 Failed to set stop loss {"symbol": "BTCUSDT", "error": "place stop loss order failed: create order: API error (status 400): {\"code\":-4136,\"msg\":\"Target strategy invalid for orderType MARKET,closePosition true\"}"}
+
+####
+**问题根源**：`FromOrderType` 函数缺少 `STOP_MARKET` 类型转换，导致 `core.OrderTypeStopMarket` 被错误转换为 `MARKET`
+
+**修复**：在 `models.go` 的 `FromOrderType` 函数中添加完整的订单类型映射：
+- `core.OrderTypeStopMarket` → `OrderTypeStopMarket` ("STOP_MARKET")
+- `core.OrderTypeStopLimit` → `OrderTypeStopLimit`
+- `core.OrderTypeTakeProfit` → `OrderTypeTakeProfitMarket`
+
+**修改文件**：`internal/execution/binance/models.go`
+
+**测试**：重启程序，止损单应该成功设置
+####
+
+
+
+### 0805
+1.用的应该是rest api吧，api文档 https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/websocket-api
+不管怎样我保存下来了
+
+Request Parameters
+Name	Type	Mandatory	Description
+symbol	STRING	YES
+side	ENUM	YES
+positionSide	ENUM	NO	Default BOTH for One-way Mode ; LONG or SHORT for Hedge Mode. It must be sent in Hedge Mode.
+type	ENUM	YES
+timeInForce	ENUM	NO
+quantity	DECIMAL	NO	Cannot be sent with closePosition=true(Close-All)
+reduceOnly	STRING	NO	"true" or "false". default "false". Cannot be sent in Hedge Mode; cannot be sent with closePosition=true
+price	DECIMAL	NO
+newClientOrderId	STRING	NO	A unique id among open orders. Automatically generated if not sent. Can only be string following the rule: ^[\.A-Z\:/a-z0-9_-]{1,36}$
+stopPrice	DECIMAL	NO	Used with STOP/STOP_MARKET or TAKE_PROFIT/TAKE_PROFIT_MARKET orders.
+closePosition	STRING	NO	true, false；Close-All，used with STOP_MARKET or TAKE_PROFIT_MARKET.
+activationPrice	DECIMAL	NO	Used with TRAILING_STOP_MARKET orders, default as the latest price(supporting different workingType)
+callbackRate	DECIMAL	NO	Used with TRAILING_STOP_MARKET orders, min 0.1, max 10 where 1 for 1%
+workingType	ENUM	NO	stopPrice triggered by: "MARK_PRICE", "CONTRACT_PRICE". Default "CONTRACT_PRICE"
+priceProtect	STRING	NO	"TRUE" or "FALSE", default "FALSE". Used with STOP/STOP_MARKET or TAKE_PROFIT/TAKE_PROFIT_MARKET orders.
+newOrderRespType	ENUM	NO	"ACK", "RESULT", default "ACK"
+priceMatch	ENUM	NO	only avaliable for LIMIT/STOP/TAKE_PROFIT order; can be set to OPPONENT/ OPPONENT_5/ OPPONENT_10/ OPPONENT_20: /QUEUE/ QUEUE_5/ QUEUE_10/ QUEUE_20; Can't be passed together with price
+selfTradePreventionMode	ENUM	NO	EXPIRE_TAKER:expire taker order when STP triggers/ EXPIRE_MAKER:expire taker order when STP triggers/ EXPIRE_BOTH:expire both orders when STP triggers; default EXPIRE_MAKER
+goodTillDate	LONG	NO	order cancel time for timeInForce GTD, mandatory when timeInforce set to GTD; order the timestamp only retains second-level precision, ms part will be ignored; The goodTillDate timestamp must be greater than the current time plus 600 seconds and smaller than 253402300799000
+recvWindow	LONG	NO
+timestamp	LONG	YES
+
+Additional mandatory parameters based on type:
+
+Type	Additional mandatory parameters
+LIMIT	timeInForce, quantity, price or priceMatch
+MARKET	quantity
+STOP/TAKE_PROFIT	quantity, stopPrice, price or priceMatch
+STOP_MARKET/TAKE_PROFIT_MARKET	stopPrice
+TRAILING_STOP_MARKET	callbackRate
+
+####
+**问题根源找到！** 根据文档：
+- STOP_MARKET 订单平掉全部仓位应该使用 `closePosition=true`
+- 使用 `closePosition=true` 时 **不能** 发送 `quantity` 参数
+- 使用 `closePosition=true` 时 **不能** 发送 `reduceOnly` 参数
+
+**修复**：
+- 添加 `ClosePosition` 字段到 CreateOrderRequest
+- STOP_MARKET 止损单使用 `closePosition=true` 而不是 `quantity` + `reduceOnly`
+- 只发送必需参数：`symbol`, `side`, `type`, `stopPrice`, `closePosition=true`
+
+**修改文件**：
+- `models.go` - 添加 ClosePosition 字段
+- `client.go` - 添加 closePosition 参数处理
+- `executor.go` - STOP_MARKET 订单使用 closePosition 模式
+
+**测试**：重启程序，应该不再报参数错误
+####
+
+
+### 0718
+1.问题还是存在，
+{"level":"ERROR","time":"2025-12-06T07:20:01.724Z","caller":"strategy/adapter.go:201","msg":"Failed to set stop loss","symbol":"BTCUSDT","error":"place stop loss order failed: create order: API error (status 400): {\"code\":-1106,\"msg\":\"Parameter 'stopprice' sent when not required.\"}"}
+再次检查一下币安官方的api文档
+
+####
+**已实施双重止损保护**：
+
+1. **主要防线**：仍尝试设置交易所 STOP_MARKET 单（已移除 WorkingType 参数）
+2. **备用防线**：启用程序内止损监控（每次 K线更新检查）
+   - 固定止损：价格触及入场价 ±0.6% 时市价平仓
+   - 跟踪止盈：四级阶梯回撤止盈
+   - 优点：即使交易所止损单失败也有保护
+   - 缺点：依赖程序运行，崩溃时无保护
+
+**修改文件**：
+- `adapter.go` - 启用 checkRiskManagement
+- `executor.go` - 移除 WorkingType 参数
+
+**测试建议**：观察日志中是否有 "Stop loss triggered by program monitor" 确认备用机制工作
+####
+
+
+
+
+### 0701
+1.开仓后挂止损单的功能还没有实现，报错
+要求是止损市价单（在触发时立即以市价成交），平掉全部仓位
+```json
+{"level":"INFO","time":"2025-12-06T07:01:01.367Z","caller":"strategy/adapter.go:237","msg":"Position update","side":"LONG","size":0.015,"entry_price":89643.1,"current_price":89649,"unrealized_pnl":0.0885,"pnl_percent":0.006581655475993132}
+{"level":"ERROR","time":"2025-12-06T07:01:01.453Z","caller":"strategy/adapter.go:201","msg":"Failed to set stop loss","symbol":"BTCUSDT","error":"place stop loss order failed: create order: API error (status 400): {\"code\":-1106,\"msg\":\"Parameter 'stopprice' sent when not required.\"}"}
+{"level":"INFO","time":"2025-12-06T07:01:01.657Z","caller":"strategy/adapter.go:237","msg":"Position update","side":"LONG","size":0.015,"entry_price":89643.1,"current_price":89649,"unrealized_pnl":0.0885,"pnl_percent":0.006581655475993132}
+{"level":"INFO","time":"2025-12-06T07:02:00.679Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-06T07:01:00.000Z","open":89649,"high":89655.8,"low":89641,"close":89641,"volume":10.187}
+{"level":"INFO","time":"2025-12-06T07:02:00.679Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"OPEN_LONG","price":89641,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉"}
+{"level":"INFO","time":"2025-12-06T07:02:01.246Z","caller":"strategy/adapter.go:159","msg":"Order placed","order_id":"BTCUSDT_1765004521","side":"BUY","type":"MARKET","quantity":0.014,"price":0,"status":"NEW"}
+{"level":"INFO","time":"2025-12-06T07:02:01.830Z","caller":"strategy/adapter.go:185","msg":"Order filled","order_id":"go_1765004520776027762","avg_price":89645.05714}
+{"level":"INFO","time":"2025-12-06T07:02:01.830Z","caller":"strategy/adapter.go:192","msg":"Setting stop loss after order placed","symbol":"BTCUSDT"}
+{"level":"INFO","time":"2025-12-06T07:02:01.929Z","caller":"strategy/adapter.go:237","msg":"Position update","side":"LONG","size":0.029,"entry_price":89644.04482758,"current_price":89644.11851779,"unrealized_pnl":0.00213701,"pnl_percent":0.0000822028949516214}
+{"level":"ERROR","time":"2025-12-06T07:02:02.018Z","caller":"strategy/adapter.go:201","msg":"Failed to set stop loss","symbol":"BTCUSDT","error":"place stop loss order failed: create order: API error (status 400): {\"code\":-1106,\"msg\":\"Parameter 'stopprice' sent when not required.\"}"}
+{"level":"INFO","time":"2025-12-06T07:02:02.115Z","caller":"strategy/adapter.go:237","msg":"Position update","side":"LONG","size":0.029,"entry_price":89644.04482758,"current_price":89644.10764822,"unrealized_pnl":0.00182179,"pnl_percent":0.00007007754385515949}
+
+```
+参考logs/session_20251206_064941/BTCUSDT_1m.log
+####
+**问题**: STOP_MARKET 订单参数错误，Binance API 报错 "Parameter 'stopprice' sent when not required"
+
+**原因**: 代码中对所有止损单类型都设置了 stopPrice，但 STOP_MARKET 的处理逻辑不够精确
+
+**修复**: 修改 `executor.go`，明确区分 STOP_MARKET 订单处理：
+- STOP_MARKET 只需要 `stopPrice`（触发价）
+- 触发后以市价成交，不需要 `price` 参数
+- 添加订单类型判断，避免设置不需要的参数
+
+**修改文件**: `internal/execution/binance/executor.go`
+
+**测试**: 重新启动程序观察止损单是否成功设置
+####
+
+
+
+### 0500
+1.在确认开仓后挂止损单的功能还没有实现，参考logs/session_20251206_063925/ETHUSDT_1m.log
+
+####
+done but not sovled
+####
+
+
+
+
+### 051225 and before
+
 ### 我正在构建一个替代freqtrade 的量化系统，具体架构如下
 
 数据模块 ---(市场数据)---> 策略模块 ---(仓位信号)---> 仓位管理 <---（当前信息）-- | --（实际下单）--->执行模块

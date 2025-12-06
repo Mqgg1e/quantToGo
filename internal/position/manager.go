@@ -27,7 +27,9 @@ type PositionState struct {
 	HighestProfit      float64   // 最高盈利（用于回撤计算）
 	HighestProfitPrice float64   // 最高盈利时的价格
 	StopLossPrice      float64   // 止损价格
+	StopLossOrderID    string    // 止损订单ID
 	TrailingStopLevel  int       // 跟踪止盈级别（1-4）
+	AddPositionCount   int       // 加仓次数（限制为1次）
 	LastUpdateTime     time.Time // 最后更新时间
 }
 
@@ -82,34 +84,46 @@ func (m *Manager) ProcessSignal(signal *core.TradingSignal, currentPrice float64
 	// 2. 处理开仓信号
 	if signal.Type == core.SignalTypeOpenLong || signal.Type == core.SignalTypeOpenShort {
 		if hasPosition {
-			// 已有持仓，检查是否为强信号（可加仓）
-			// Metadata 只能存储 float64，1.0 表示 true
-			strongSignalValue, hasStrongSignal := signal.Metadata["strong_signal"]
+			// 已有持仓，检查是否满足加仓条件（三个交叉都满足）
 			addPositionValue, hasAddEligible := signal.Metadata["add_position_eligible"]
-
-			isStrongSignal := hasStrongSignal && strongSignalValue == 1.0
 			canAddPosition := hasAddEligible && addPositionValue == 1.0
 
-			if isStrongSignal && canAddPosition {
+			if canAddPosition {
 				// 检查方向是否一致
 				if (signal.Type == core.SignalTypeOpenLong && position.Side == core.PositionSideLong) ||
 					(signal.Type == core.SignalTypeOpenShort && position.Side == core.PositionSideShort) {
-					// 方向一致且为强信号，执行加仓
-					logger.Info("Strong signal detected, adding to position",
+
+					// 检查加仓次数限制（只允许加仓1次）
+					if position.AddPositionCount >= 1 {
+						logger.Info("Add position limit reached, ignoring signal",
+							zap.String("symbol", symbol),
+							zap.Int("add_count", position.AddPositionCount),
+							zap.String("reason", "maximum 1 add allowed"),
+						)
+						return nil, nil
+					}
+
+					// 方向一致且满足加仓条件，执行加仓
+					logger.Info("Add position condition met, adding to position",
 						zap.String("symbol", symbol),
 						zap.String("signal_type", string(signal.Type)),
 						zap.String("position_side", string(position.Side)),
+						zap.Int("current_add_count", position.AddPositionCount),
 					)
 
 					order, err := m.createAddOrder(signal, currentPrice)
 					if err != nil {
 						return nil, err
 					}
+
+					// 增加加仓次数
+					position.AddPositionCount++
+
 					return []*core.Order{order}, nil
 				}
 			}
 
-			// 已有持仓但不是强信号或方向不一致，忽略
+			// 已有持仓但不满足加仓条件或方向不一致，忽略
 			return nil, nil
 		}
 
@@ -180,7 +194,9 @@ func (m *Manager) UpdatePosition(position *core.Position) error {
 			HighestProfit:      position.UnrealizedPnLPercent,
 			HighestProfitPrice: position.CurrentPrice,
 			StopLossPrice:      m.calculateStopLossPrice(position),
+			StopLossOrderID:    "",
 			TrailingStopLevel:  0,
+			AddPositionCount:   0,
 			LastUpdateTime:     time.Now(),
 		}
 		m.positions[position.Symbol] = state
@@ -478,4 +494,82 @@ func (m *Manager) CheckTrailingStop(symbol string, currentPrice float64) (bool, 
 	}
 
 	return false, nil
+}
+
+// SetStopLoss 设置止损单（开仓或加仓后调用）
+// 参数:
+//
+//	ctx: context.Context - 上下文
+//	symbol: string - 交易对
+//
+// 返回:
+//
+//	error - 设置失败时的错误信息
+func (m *Manager) SetStopLoss(ctx context.Context, symbol string) error {
+	m.mu.Lock()
+	state, exists := m.positions[symbol]
+	m.mu.Unlock()
+
+	if !exists {
+		return fmt.Errorf("position not found for symbol: %s", symbol)
+	}
+
+	// 如果已有止损单，先取消旧的
+	if state.StopLossOrderID != "" {
+		logger.Info("Canceling existing stop loss order",
+			zap.String("symbol", symbol),
+			zap.String("old_order_id", state.StopLossOrderID),
+		)
+		_ = m.executor.CancelOrder(ctx, symbol, state.StopLossOrderID)
+	}
+
+	// 创建止损单
+	var side core.OrderSide
+	if state.Side == core.PositionSideLong {
+		side = core.OrderSideSell // 多单用卖出止损
+	} else {
+		side = core.OrderSideBuy // 空单用买入止损
+	}
+
+	stopLossOrder := &core.Order{
+		Symbol:    symbol,
+		Type:      core.OrderTypeStopMarket, // 市价止损单
+		Side:      side,
+		Quantity:  state.Size, // 平掉全部仓位
+		StopPrice: state.StopLossPrice,
+		Leverage:  state.Leverage,
+		Metadata: map[string]interface{}{
+			"reduce_only":  true,
+			"order_type":   "stop_loss",
+			"stop_percent": 0.006, // 0.6%
+		},
+	}
+
+	logger.Info("Setting stop loss order",
+		zap.String("symbol", symbol),
+		zap.String("side", string(side)),
+		zap.Float64("quantity", stopLossOrder.Quantity),
+		zap.Float64("stop_price", stopLossOrder.StopPrice),
+		zap.Float64("entry_price", state.EntryPrice),
+		zap.Float64("stop_loss_percent", 0.6),
+	)
+
+	// 提交止损单
+	resultOrder, err := m.executor.PlaceOrder(ctx, stopLossOrder)
+	if err != nil {
+		return fmt.Errorf("place stop loss order failed: %w", err)
+	}
+
+	// 保存止损单ID
+	m.mu.Lock()
+	state.StopLossOrderID = resultOrder.ID
+	m.mu.Unlock()
+
+	logger.Info("Stop loss order placed successfully",
+		zap.String("symbol", symbol),
+		zap.String("order_id", resultOrder.ID),
+		zap.Float64("stop_price", stopLossOrder.StopPrice),
+	)
+
+	return nil
 }
