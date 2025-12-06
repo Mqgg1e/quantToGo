@@ -1,3 +1,0 @@
-{"level":"INFO","time":"2025-12-05T12:18:47.015Z","caller":"test-symbol-logging/main.go:33","msg":"Log file created","symbol":"BTCUSDT","interval":"3m","file":"logs/session_20251205_121847/BTCUSDT_3m.log"}
-{"level":"INFO","time":"2025-12-05T12:18:47.015Z","caller":"runtime/proc.go:285","msg":"Kline received","sequence":1,"time":"2025-12-05T12:18:47.015Z","close":91150,"volume":123.45}
-{"level":"INFO","time":"2025-12-05T12:18:47.015Z","caller":"runtime/proc.go:285","msg":"Signal generated","signal_type":"OPEN_LONG","price":91150,"reason":"测试信号"}
