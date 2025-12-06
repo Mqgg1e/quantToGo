@@ -1,196 +1,110 @@
-# goQuant - K线数据实时处理系统
+# goQuant
 
-高性能的币安期货K线数据实时采集、存储和分发系统，支持自动重连、数据补全、多订阅者分发等企业级功能。
+> 生产级量化交易框架 - 币安期货实盘交易系统
 
-## 🚀 快速开始
+[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-success)](.)
 
-### 基础版本（v1）- 学习和测试
-```bash
-cd examples/basic
-go run main.go
-```
+## 快速开始
 
-### 增强版本（v2）- 生产环境推荐 ⭐
-```bash
-cd examples/enhanced
-go run main.go
-```
-
-### 主程序（默认使用v2）
-```bash
-cd cmd/bot
-go run main.go
-```
-
-## 📁 项目结构
-
-```
-goQuant/
-├── cmd/bot/                       # 主程序（v2）
-├── examples/
-│   ├── basic/                    # v1 基础版本示例
-│   └── enhanced/                 # v2 增强版本示例
-├── internal/dataManager/
-│   ├── base/                     # v1 版本 - 简单稳定
-│   ├── v2/                       # v2 版本 - 生产级增强
-│   ├── dataFromWS.go             # WebSocket 基础
-│   ├── klinestore.go             # SQLite 存储
-│   ├── models.go                 # 数据结构
-│   └── utils.go                  # 工具函数
-└── data/                         # 数据文件（自动创建）
-```
-
-## ✨ 功能对比
-
-| 功能 | v1 (base) | v2 (enhanced) |
-|------|-----------|---------------|
-| WebSocket 订阅 | ✅ | ✅ |
-| 多数据库存储 | ✅ | ✅ |
-| 自动重连 | ❌ | ✅ |
-| 完整性检查 | ❌ | ✅ |
-| REST 补全 | ❌ | ✅ |
-| 多订阅者分发 | ❌ | ✅ |
-| 性能监控 | ❌ | ✅ |
-
-## 📚 文档
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - 项目架构和版本选择指南
-- **[NAVIGATION_MAP.md](NAVIGATION_MAP.md)** - 项目导航地图
-- **[internal/dataManager/README.md](internal/dataManager/README.md)** - 模块说明
-- **[internal/dataManager/QUICK_REFERENCE.md](internal/dataManager/QUICK_REFERENCE.md)** - API 快速参考
-- **[internal/dataManager/ENHANCEMENT.md](internal/dataManager/ENHANCEMENT.md)** - v2 增强功能详解
-
-## 💻 代码集成
-
-### 使用 v1（基础版本）
-```go
-import base "goQuant/internal/dataManager/base"
-
-processor, _ := base.NewMultiKlineProcessor("/path/to/db")
-msgCh, errCh, closeFn := base.SubscribeKlines(ctx, "BTCUSDT", "1m", proxyURL)
-processor.ProcessStream(ctx, msgCh, errCh)
-```
-
-### 使用 v2（增强版本）
-```go
-import v2 "goQuant/internal/dataManager/v2"
-
-processor, _ := v2.NewEnhancedMultiKlineProcessor("/path/to/db", proxyURL)
-processor.StartSubscription(ctx, "BTCUSDT", "1m")  // 自动重连
-processor.Subscribe("BTCUSDT", "1m", mySubscriber) // 自定义处理
-processor.PrintAllStats()                          // 查看统计
-```
-
-## 🧪 测试
+### 测试网模式（推荐新手）
 
 ```bash
-# 测试 v1 版本
-go test ./internal/dataManager/base -v
+# 1. 获取测试网API密钥
+# 访问: https://testnet.binancefuture.com/
 
-# 测试 v2 版本
-go test ./internal/dataManager/v2 -v
+# 2. 配置文件已预设好（使用测试网）
+# config/config.yaml 已配置
 
-# 所有测试
-go test ./internal/dataManager/... -v
+# 3. 直接启动
+./scripts/start-live.sh
 ```
 
-**测试状态**: ✅ 11/11 通过
+### 实盘模式（有经验用户）
 
-## 🎯 版本选择
-
-### 什么时候用 v1?
-- 学习和理解基础概念
-- 简单的数据收集任务
-- 不需要自动重连和补全
-
-### 什么时候用 v2?
-- ⭐ **生产环境推荐**
-- 需要 24h 连续运行
-- 需要自动重连和数据完整性保证
-- 需要多订阅者支持
-
-## ⚙️ 配置
-
-### 代理设置
 ```bash
-proxyURL := "http://127.0.0.1:7897"  # 可选，留空不使用代理
+# 1. 修改配置文件
+vim config/config.yaml
+# 将 base_url 改为: https://fapi.binance.com
+# 将 testnet 改为: false
+# 设置你的实盘API密钥
+
+# 2. 启动
+./scripts/start-live.sh
 ```
 
-### 数据库路径
-```bash
-baseDir := "/home/maeda/Documents/projects/goQuant/data/wsdata"
-```
+**完整教程**: 查看 [STATUS_SUMMARY.md](STATUS_SUMMARY.md)
 
-## 📊 性能指标
+## 核心功能
 
-| 指标 | 数值 |
+- ✅ **MACD+EMA+VWAP** 组合策略
+- ✅ **20%/40%** 资金分配 + **5倍**杠杆
+- ✅ **0.6%**固定止损 + **三段**跟踪止盈
+- ✅ 币安期货API完整封装
+- ✅ 实时数据 + 自动重连 + 数据完整性检查
+
+## 文档导航
+
+| 文档 | 说明 |
 |------|------|
-| WebSocket 延迟 | ~500ms |
-| 数据处理延迟 | <5ms |
-| 消息分发延迟 | <1ms |
-| 内存占用 | ~5MB/处理器 |
-| CPU 占用 | <1% |
-| 重连成功率 | >99.9% |
+| [STATUS_SUMMARY.md](STATUS_SUMMARY.md) | ⭐ 运行状态说明 |
+| [MODE_SWITCH_GUIDE.md](docs/MODE_SWITCH_GUIDE.md) | ⭐ 模式切换指南 |
+| [快速开始](docs/01-QUICK_START.md) | 5分钟上手 |
+| [架构设计](docs/02-ARCHITECTURE.md) | 系统架构 |
+| [策略详解](docs/03-STRATEGY.md) | 策略规则 |
+| [更新日志](docs/CHANGELOG.md) | 版本历史 |
 
-## 🔧 常见操作
+## 常用命令
 
-### 编译
 ```bash
-go build ./cmd/bot      # 主程序
-go build ./examples/... # 示例程序
+# 启动程序
+./scripts/start-live.sh
+
+# 查看状态
+./scripts/check-status.sh
+
+# 查看K线数据
+sqlite3 data/wsdata/BTCUSDT_3m.db "SELECT COUNT(*) FROM klines;"
+
+# 停止程序
+pkill live-trading
 ```
 
-### 运行测试
-```bash
-go test ./internal/dataManager/... -v
+## 架构
+
+```
+WebSocket → DataManager → Strategy → Signal → 
+PositionManager → Order → Executor → Binance
 ```
 
-### 清理临时文件
-```bash
-go clean ./...
-```
+## ⚠️ 重要提醒
 
-## ⚠️ 注意事项
+1. **API密钥安全**: 
+   - ❌ 不要硬编码到代码中
+   - ✅ 使用环境变量
+   - ✅ 限制API权限（只开交易）
 
-- **Context 管理**: 记得正确处理 Context 的取消
-- **资源释放**: 必须调用 `defer processor.Close()`
-- **数据库路径**: 程序会自动创建独立的数据库文件
-- **代理配置**: 如需代理，必须在初始化时设置
+2. **必须先测试**: 
+   - ✅ 在测试网测试 (https://testnet.binancefuture.com/)
+   - ✅ 小额资金开始 (<1000 USDT)
+   - ✅ 监控24小时后再加大资金
 
-## 🐛 故障排查
+3. **风险提示**: 
+   - 量化交易有风险
+   - 持续监控运行
+   - 准备应急方案
 
-### 连接失败
-- 检查网络连接
-- 检查 Binance API 可达性
-- 验证代理配置
+## 项目状态
 
-### 数据缺失
-- 查看 `FilledCount` 统计信息
-- 检查 REST API 配额
-- 查看错误日志
+- **版本**: v1.0.0
+- **发布**: 2024-12-05
+- **状态**: ✅ 生产就绪
 
-### 内存占用过高
-- 减少缓冲大小
-- 减少订阅者数量
-- 定期清理旧数据
-
-## 📞 获取帮助
-
-1. 查看 `ARCHITECTURE.md` 了解项目结构
-2. 查看 `NAVIGATION_MAP.md` 快速定位功能
-3. 参考 `examples/` 中的示例代码
-4. 查看源代码和单元测试
-
-## 📝 License
+## License
 
 MIT
 
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request!
-
 ---
 
-**当前版本**: v2.0  
-**推荐环境**: v2 (生产级别)  
-**最后更新**: 2025-12-03
+**⚡ 开始你的量化交易！**
+

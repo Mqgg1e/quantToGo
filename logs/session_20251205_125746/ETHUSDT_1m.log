@@ -1,0 +1,56 @@
+{"level":"INFO","time":"2025-12-05T12:57:48.277Z","caller":"logger/symbol_logger.go:133","msg":"Log file created","symbol":"ETHUSDT","interval":"1m","file":"logs/session_20251205_125746/ETHUSDT_1m.log"}
+{"level":"INFO","time":"2025-12-05T12:58:00.856Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T12:57:00.000Z","open":3126.92,"high":3128.3,"low":3126.91,"close":3127.62,"volume":584.464}
+{"level":"INFO","time":"2025-12-05T12:59:00.154Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T12:58:00.000Z","open":3127.62,"high":3127.83,"low":3127.08,"close":3127.3,"volume":186.893}
+{"level":"INFO","time":"2025-12-05T13:00:00.740Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T12:59:00.000Z","open":3127.3,"high":3127.3,"low":3125.92,"close":3126.49,"volume":435.731}
+{"level":"INFO","time":"2025-12-05T13:01:00.561Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:00:00.000Z","open":3126.5,"high":3126.71,"low":3125.33,"close":3125.33,"volume":533.209}
+{"level":"INFO","time":"2025-12-05T13:02:00.390Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:01:00.000Z","open":3125.33,"high":3125.33,"low":3123.32,"close":3124,"volume":1652.474}
+{"level":"INFO","time":"2025-12-05T13:03:00.382Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:02:00.000Z","open":3124,"high":3127.51,"low":3124,"close":3125.95,"volume":558.035}
+{"level":"INFO","time":"2025-12-05T13:04:00.450Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:03:00.000Z","open":3125.96,"high":3125.96,"low":3123.82,"close":3124.25,"volume":676.908}
+{"level":"INFO","time":"2025-12-05T13:05:00.167Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:04:00.000Z","open":3124.25,"high":3124.26,"low":3111.75,"close":3114.22,"volume":16209.842}
+{"level":"INFO","time":"2025-12-05T13:06:00.279Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:05:00.000Z","open":3114.23,"high":3119.6,"low":3113.09,"close":3119.1,"volume":6919.638}
+{"level":"INFO","time":"2025-12-05T13:07:00.085Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:06:00.000Z","open":3119.11,"high":3120.18,"low":3118.14,"close":3119.06,"volume":2368.336}
+{"level":"INFO","time":"2025-12-05T13:08:00.362Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:07:00.000Z","open":3119.06,"high":3119.06,"low":3117.06,"close":3117.33,"volume":1127.532}
+{"level":"INFO","time":"2025-12-05T13:09:00.101Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:08:00.000Z","open":3117.33,"high":3121.13,"low":3117.29,"close":3120.95,"volume":2172.436}
+{"level":"INFO","time":"2025-12-05T13:10:00.087Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:09:00.000Z","open":3120.96,"high":3131,"low":3119.29,"close":3128.61,"volume":9801.554}
+{"level":"INFO","time":"2025-12-05T13:11:00.372Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:10:00.000Z","open":3128.61,"high":3134.65,"low":3128.61,"close":3132.71,"volume":8207.234}
+{"level":"INFO","time":"2025-12-05T13:11:00.372Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3132.71,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:11:00.372Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:12:00.118Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:11:00.000Z","open":3132.71,"high":3137.12,"low":3132.2,"close":3132.52,"volume":6060.878}
+{"level":"INFO","time":"2025-12-05T13:12:00.118Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3132.52,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:12:00.118Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:13:00.158Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:12:00.000Z","open":3132.53,"high":3133.28,"low":3128.39,"close":3128.91,"volume":2656.197}
+{"level":"INFO","time":"2025-12-05T13:13:00.158Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3128.91,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:13:00.158Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:14:00.541Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:13:00.000Z","open":3128.92,"high":3128.92,"low":3125.94,"close":3126.44,"volume":1206.828}
+{"level":"INFO","time":"2025-12-05T13:15:00.070Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:14:00.000Z","open":3126.44,"high":3127.41,"low":3122.92,"close":3123.18,"volume":1825.169}
+{"level":"INFO","time":"2025-12-05T13:16:00.378Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:15:00.000Z","open":3123.18,"high":3125.29,"low":3120.6,"close":3121.54,"volume":2181.68}
+{"level":"INFO","time":"2025-12-05T13:17:00.171Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:16:00.000Z","open":3121.54,"high":3126.76,"low":3121.54,"close":3125.52,"volume":3446.332}
+{"level":"INFO","time":"2025-12-05T13:18:00.319Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:17:00.000Z","open":3125.52,"high":3128.19,"low":3123.85,"close":3128.19,"volume":1841.051}
+{"level":"INFO","time":"2025-12-05T13:19:00.270Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:18:00.000Z","open":3128.19,"high":3130,"low":3127.67,"close":3129.77,"volume":1437.914}
+{"level":"INFO","time":"2025-12-05T13:20:00.964Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:19:00.000Z","open":3129.76,"high":3129.77,"low":3127.16,"close":3128.01,"volume":945.882}
+{"level":"INFO","time":"2025-12-05T13:20:00.964Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3128.01,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:20:00.964Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:21:00.114Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:20:00.000Z","open":3128.01,"high":3128.76,"low":3126.6,"close":3128.25,"volume":1330.649}
+{"level":"INFO","time":"2025-12-05T13:21:00.114Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3128.25,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:21:00.114Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:22:00.157Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:21:00.000Z","open":3128.25,"high":3128.88,"low":3125.3,"close":3126.99,"volume":1664.94}
+{"level":"INFO","time":"2025-12-05T13:22:00.157Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3126.99,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:22:00.157Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:23:00.327Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:22:00.000Z","open":3126.99,"high":3130.52,"low":3126.89,"close":3128.75,"volume":2965.715}
+{"level":"INFO","time":"2025-12-05T13:23:00.327Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3128.75,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:23:00.328Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:24:00.626Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:23:00.000Z","open":3128.76,"high":3130,"low":3127.68,"close":3128.76,"volume":1408.839}
+{"level":"INFO","time":"2025-12-05T13:24:00.626Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_LONG","price":3128.76,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:24:00.626Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:25:00.140Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:24:00.000Z","open":3128.76,"high":3129.27,"low":3126.13,"close":3127.75,"volume":1064.376}
+{"level":"INFO","time":"2025-12-05T13:26:00.394Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:25:00.000Z","open":3127.75,"high":3127.75,"low":3122.04,"close":3122.78,"volume":2019.69}
+{"level":"INFO","time":"2025-12-05T13:26:00.394Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_SHORT","price":3122.78,"confidence":1,"reason":"MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:26:00.394Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:27:00.176Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:26:00.000Z","open":3122.78,"high":3125.94,"low":3120.27,"close":3123.64,"volume":5727.498}
+{"level":"INFO","time":"2025-12-05T13:27:00.176Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_SHORT","price":3123.64,"confidence":1,"reason":"MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:27:00.176Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:28:00.124Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:27:00.000Z","open":3123.64,"high":3125.44,"low":3120.8,"close":3121.69,"volume":5535.602}
+{"level":"INFO","time":"2025-12-05T13:28:00.124Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"ADD_SHORT","price":3121.69,"confidence":1,"reason":"MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉(加仓)"}
+{"level":"INFO","time":"2025-12-05T13:28:00.124Z","caller":"strategy/adapter.go:101","msg":"No orders generated"}
+{"level":"INFO","time":"2025-12-05T13:29:00.117Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:28:00.000Z","open":3121.69,"high":3121.7,"low":3113.57,"close":3115,"volume":13252.08}
+{"level":"INFO","time":"2025-12-05T13:30:00.216Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T13:29:00.000Z","open":3115,"high":3121.56,"low":3111.11,"close":3119.43,"volume":10427.827}

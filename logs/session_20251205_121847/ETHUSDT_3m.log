@@ -1,0 +1,2 @@
+{"level":"INFO","time":"2025-12-05T12:18:47.116Z","caller":"test-symbol-logging/main.go:33","msg":"Log file created","symbol":"ETHUSDT","interval":"3m","file":"logs/session_20251205_121847/ETHUSDT_3m.log"}
+{"level":"INFO","time":"2025-12-05T12:18:47.116Z","caller":"runtime/proc.go:285","msg":"Kline received","sequence":2,"time":"2025-12-05T12:18:47.116Z","close":3117.58,"volume":123.45}

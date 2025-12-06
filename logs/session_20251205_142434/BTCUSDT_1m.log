@@ -1,0 +1,7 @@
+{"level":"INFO","time":"2025-12-05T14:24:36.556Z","caller":"logger/symbol_logger.go:133","msg":"Log file created","symbol":"BTCUSDT","interval":"1m","file":"logs/session_20251205_142434/BTCUSDT_1m.log"}
+{"level":"INFO","time":"2025-12-05T14:25:00.495Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T14:24:00.000Z","open":90334.8,"high":90370.1,"low":90334.7,"close":90349.7,"volume":61.502}
+{"level":"INFO","time":"2025-12-05T14:26:00.225Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T14:25:00.000Z","open":90349.7,"high":90469.2,"low":90349.7,"close":90463.9,"volume":183.595}
+{"level":"INFO","time":"2025-12-05T14:27:00.116Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T14:26:00.000Z","open":90463.9,"high":90505.6,"low":90428.2,"close":90449.5,"volume":217.235}
+{"level":"INFO","time":"2025-12-05T14:28:00.317Z","caller":"strategy/adapter.go:61","msg":"Kline received","open_time":"2025-12-05T14:27:00.000Z","open":90449.5,"high":90449.5,"low":90395,"close":90396.7,"volume":100.258}
+{"level":"INFO","time":"2025-12-05T14:28:00.318Z","caller":"strategy/adapter.go:86","msg":"Signal generated","signal_type":"OPEN_LONG","price":90396.7,"confidence":1,"reason":"MACD金叉+EMA5/VWAP8金叉"}
+{"level":"ERROR","time":"2025-12-05T14:28:01.018Z","caller":"strategy/adapter.go:109","msg":"Execute order failed","symbol":"BTCUSDT","error":"risk check failed: invalid quantity: 0.000000"}

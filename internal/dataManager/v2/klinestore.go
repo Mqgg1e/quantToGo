@@ -119,7 +119,7 @@ func (ks *KlineStore) SaveKline(kline *KlineData) error {
 		kline.LowPrice,
 		kline.BaseVolume,
 		kline.QuoteVolume,
-		boolToInt(kline.IsClosed),
+		boolToInt(kline.IsClosed()),
 	)
 
 	if err != nil {
@@ -171,7 +171,7 @@ func (ks *KlineStore) SaveKlines(klines []*KlineData) error {
 			kline.LowPrice,
 			kline.BaseVolume,
 			kline.QuoteVolume,
-			boolToInt(kline.IsClosed),
+			boolToInt(kline.IsClosed()),
 		)
 		if err != nil {
 			return fmt.Errorf("insert kline: %w", err)
@@ -230,7 +230,7 @@ func (ks *KlineStore) GetKlines(symbol, interval string, limit int) ([]*KlineDat
 		if err != nil {
 			return nil, fmt.Errorf("scan kline: %w", err)
 		}
-		kline.IsClosed = isClosed == 1
+		kline.isClosedField = isClosed == 1
 		klines = append(klines, kline)
 	}
 

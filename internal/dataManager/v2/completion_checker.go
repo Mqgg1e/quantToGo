@@ -153,19 +153,19 @@ func (cc *CompletionChecker) parseRESTKline(rawKline []interface{}) (*KlineData,
 	quoteVolume := toFloat64(rawKline[7])
 
 	return &KlineData{
-		EventType:   "kline",
-		EventTime:   closeTime,
-		Symbol:      cc.symbol,
-		StartTime:   openTime,
-		CloseTime:   closeTime,
-		Interval:    cc.interval,
-		OpenPrice:   open,
-		ClosePrice:  close,
-		HighPrice:   high,
-		LowPrice:    low,
-		BaseVolume:  volume,
-		QuoteVolume: quoteVolume,
-		IsClosed:    true,
+		EventType:     "kline",
+		EventTime:     closeTime,
+		Symbol:        cc.symbol,
+		StartTime:     openTime,
+		CloseTime:     closeTime,
+		Interval:      cc.interval,
+		OpenPrice:     open,
+		ClosePrice:    close,
+		HighPrice:     high,
+		LowPrice:      low,
+		BaseVolume:    volume,
+		QuoteVolume:   quoteVolume,
+		isClosedField: true,
 	}, nil
 }
 

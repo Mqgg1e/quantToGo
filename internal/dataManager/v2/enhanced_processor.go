@@ -173,7 +173,7 @@ func (esp *EnhancedStreamProcessor) processMessages(ctx context.Context, msgCh <
 			esp.statsLock.Unlock()
 
 			// 只处理收盘的K线
-			if !kline.IsClosed {
+			if !kline.IsClosed() {
 				continue
 			}
 

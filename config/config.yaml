@@ -1,0 +1,172 @@
+# goQuant 配置文件示例
+
+app:
+  name: "goQuant"
+  mode: "live"  # backtest | paper | live
+  environment: "development"  # development | production
+
+# ========== 数据模块配置 ==========
+data:
+  provider: "binance"
+  proxy_url: "http://127.0.0.1:7897"  # 留空则不使用代理
+  database_dir: "./data/wsdata"
+
+  # 订阅配置
+  subscriptions:
+    - symbol: "BTCUSDT"
+      interval: "1m"
+      enable_orderbook: true
+      orderbook_levels: 5
+    - symbol: "ETHUSDT"
+      interval: "1m"
+      enable_orderbook: true
+      orderbook_levels: 5
+
+  # 重连配置
+  reconnect:
+    max_retries: 10
+    initial_delay: 1s
+    max_delay: 5m
+    heartbeat_timeout: 45s
+
+# ========== 策略配置 ==========
+strategy:
+  name: "MACD_EMA_Strategy"
+  warmup_periods: 45  # 预热K线数量（MACD需要26+9=35，加缓冲10）
+  enable_backfill: true
+
+  # 策略参数（拆分后的策略 - testStrategy.md）
+  parameters:
+    # MACD参数（修改为16,26,9）
+    macd_fast: 16
+    macd_slow: 26
+    macd_signal: 9
+
+    # EMA参数
+    ema_short: 5
+    ema_long: 15
+
+    # VWAP参数
+    vwap_period: 8
+
+    # 趋势检测参数
+    trend_periods: 4
+    trend_threshold: 0.0055  # 0.55%
+
+    # 信号跟踪周期（检查最近N个周期的交叉）
+    signal_lookback: 3
+
+# ========== 仓位管理配置 ==========
+position:
+  default_leverage: 5
+  default_margin_mode: "ISOLATED"  # ISOLATED | CROSS
+  max_position_size: 0.05  # 最大仓位占总资金%
+
+  # 风险限制
+  risk_limits:
+    max_drawdown: 0.20         # 最大回撤20%
+    max_daily_loss: 0.05       # 单日最大亏损5%
+    max_open_positions: 3      # 最多持仓3个
+    stop_loss_percent: 0.006   # 固定止损0.6%
+    take_profit_percent: 0.048 # 最高止盈目标4.8%
+
+  # 仓位计算（拆分后策略）
+  position_sizing:
+    method: "fixed"           # fixed | risk_based | kelly
+    open_percent: 0.20        # 开仓使用20%资金
+    add_percent: 0.40         # 加仓使用40%资金
+
+  # 跟踪止盈配置（三段式）
+  trailing_stop:
+    enabled: true
+    # Level 1: 0.6%-1.0% 盈利
+    level1_profit_min: 0.006
+    level1_profit_max: 0.010
+    level1_callback: 0.005    # 回撤0.5%止盈
+
+    # Level 2: 1.0%-1.8% 盈利
+    level2_profit_min: 0.010
+    level2_profit_max: 0.018
+    level2_callback: 0.0055   # 回撤0.55%止盈
+
+    # Level 3: 1.8%-4.8% 盈利
+    level3_profit_min: 0.018
+    level3_profit_max: 0.048
+    level3_callback: 0.0068   # 回撤0.68%止盈
+
+    # Level 4: >4.8% 盈利
+    level4_profit_min: 0.048
+    level4_callback: 0.008    # 回撤0.8%止盈
+
+# ========== 执行模块配置 ==========
+execution:
+  mode: "live"  # backtest | paper | live
+  exchange: "binance"
+
+  # 币安API配置
+  binance:
+    api_key: "UdwTGmKnQ0sFqlOumcBQjc08GGHAMh4rCQX10FfuJTmLgpZFoqBbN1oNyjb28s9z"
+    secret_key: "IvWeC8asG5Pj2eBF8yF2APamO0SuYvAc7USINqDhBeJxu6hv9kuUASbbxTqjKXCi"
+    base_url: "https://testnet.binancefuture.com"  # 测试网/模拟盘
+    ws_base_url: "wss://stream.binancefuture.com"
+    testnet: true
+
+  # 回测配置
+  backtest:
+    data_source: "database"
+    database_path: "./data/backtestData/ETHUSDT_3m_2021-01-01_2025-11-30_futures_kline.db"
+    start_date: "2024-01-01T00:00:00Z"
+    end_date: "2024-12-31T23:59:59Z"
+    initial_balance: 10000.0
+
+  # 手续费配置
+  fees:
+    maker_fee: 0.0002  # 0.02%
+    taker_fee: 0.0004  # 0.04%
+
+  # 滑点配置
+  slippage:
+    enabled: true
+    fixed_bps: 5      # 固定5个基点
+    random_bps: 3     # 随机±3基点
+
+# ========== 可观测性配置 ==========
+observability:
+  # 日志配置
+  logging:
+    level: "info"           # debug | info | warn | error
+    format: "json"          # json | text
+    output_path: "stdout"   # stdout | 文件路径
+    max_size: 100           # MB
+    max_backups: 5
+    max_age: 30             # days
+
+  # 指标配置
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+
+  # 告警配置
+  alerts:
+    enabled: true
+    channels: ["console", "file"]  # console | file | sns
+
+    # SNS配置（预留）
+    sns:
+      enabled: false
+      region: "us-east-1"
+      topic_arn: ""
+
+    # 告警规则
+    rules:
+      - name: "high_drawdown"
+        condition: "drawdown > 0.15"
+        severity: "critical"
+      - name: "connection_failure"
+        condition: "connection_errors > 5"
+        severity: "warning"
+      - name: "order_rejection"
+        condition: "rejected_orders > 3"
+        severity: "warning"
+
