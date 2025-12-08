@@ -30,6 +30,7 @@ type PositionState struct {
 	StopLossOrderID    string    // 止损订单ID
 	TrailingStopLevel  int       // 跟踪止盈级别（1-4）
 	AddPositionCount   int       // 加仓次数（限制为1次）
+	OpenTime           time.Time // 开仓时间（用于判断加仓时机）
 	LastUpdateTime     time.Time // 最后更新时间
 }
 
@@ -62,22 +63,44 @@ func (m *Manager) ProcessSignal(signal *core.TradingSignal, currentPrice float64
 		}
 
 		if needClose {
-			// 先生成平仓订单
+			// 取消旧的止损单（如果存在）
+			if position.StopLossOrderID != "" {
+				ctx := context.Background()
+				err := m.executor.CancelOrder(ctx, symbol, position.StopLossOrderID)
+				if err != nil {
+					logger.Warn("Failed to cancel stop loss order on reverse close",
+						zap.String("symbol", symbol),
+						zap.String("order_id", position.StopLossOrderID),
+						zap.Error(err),
+					)
+				} else {
+					logger.Info("Cancelled stop loss order on reverse close",
+						zap.String("symbol", symbol),
+						zap.String("order_id", position.StopLossOrderID),
+					)
+				}
+			}
+
+			// 生成平仓订单
 			closeOrder, err := m.createCloseOrder(symbol, position, currentPrice)
 			if err != nil {
 				return nil, fmt.Errorf("create close order: %w", err)
 			}
 
-			// 平仓后清除持仓状态
-			delete(m.positions, symbol)
+			// ⚠️ 不要立即删除持仓状态！
+			// 平仓订单提交后，持仓可能还没清空
+			// 应该等待 UpdatePosition 收到 Size=0 的更新后自动删除
+			// delete(m.positions, symbol)  // ← 删除这行
 
-			// 再生成新的开仓订单
-			openOrder, err := m.createOpenOrder(signal, currentPrice)
-			if err != nil {
-				return nil, fmt.Errorf("create open order: %w", err)
-			}
+			// 只返回平仓订单，不立即开新仓
+			// 等持仓清空后，下次信号再开仓
+			logger.Info("Closing position due to reverse signal, will open new position after close confirmed",
+				zap.String("symbol", symbol),
+				zap.String("current_side", string(position.Side)),
+				zap.String("new_signal", string(signal.Type)),
+			)
 
-			return []*core.Order{closeOrder, openOrder}, nil
+			return []*core.Order{closeOrder}, nil
 		}
 	}
 
@@ -103,12 +126,27 @@ func (m *Manager) ProcessSignal(signal *core.TradingSignal, currentPrice float64
 						return nil, nil
 					}
 
+					// 检查是否在开仓后的时间窗口内（最多3个K线周期）
+					// 使用10分钟作为通用窗口，可覆盖3x3分钟K线
+					maxAddWindow := 10 * time.Minute
+					timeSinceOpen := time.Since(position.OpenTime)
+					if timeSinceOpen > maxAddWindow {
+						logger.Info("Add position window expired, ignoring signal",
+							zap.String("symbol", symbol),
+							zap.Duration("time_since_open", timeSinceOpen),
+							zap.Duration("max_window", maxAddWindow),
+							zap.String("reason", "add position only allowed within 10 minutes of initial open"),
+						)
+						return nil, nil
+					}
+
 					// 方向一致且满足加仓条件，执行加仓
 					logger.Info("Add position condition met, adding to position",
 						zap.String("symbol", symbol),
 						zap.String("signal_type", string(signal.Type)),
 						zap.String("position_side", string(position.Side)),
 						zap.Int("current_add_count", position.AddPositionCount),
+						zap.Duration("time_since_open", timeSinceOpen),
 					)
 
 					order, err := m.createAddOrder(signal, currentPrice)
@@ -197,6 +235,7 @@ func (m *Manager) UpdatePosition(position *core.Position) error {
 			StopLossOrderID:    "",
 			TrailingStopLevel:  0,
 			AddPositionCount:   0,
+			OpenTime:           time.Now(), // 记录开仓时间
 			LastUpdateTime:     time.Now(),
 		}
 		m.positions[position.Symbol] = state
@@ -270,9 +309,9 @@ func (m *Manager) CalculatePositionSize(signal *core.TradingSignal, accountBalan
 	var percent float64
 	switch signal.Type {
 	case core.SignalTypeOpenLong, core.SignalTypeOpenShort:
-		percent = 0.20 // 开仓使用20%
+		percent = m.config.PositionSizing.OpenPercent // 使用配置的开仓比例
 	case core.SignalTypeAddLong, core.SignalTypeAddShort:
-		percent = 0.40 // 加仓使用40%
+		percent = m.config.PositionSizing.AddPercent // 使用配置的加仓比例
 	default:
 		return 0, fmt.Errorf("invalid signal type for position sizing: %s", signal.Type)
 	}
@@ -376,10 +415,12 @@ func (m *Manager) createCloseOrder(symbol string, position *PositionState, curre
 
 	// 市价平仓
 	order := &core.Order{
-		Symbol:   symbol,
-		Type:     core.OrderTypeMarket,
-		Side:     side,
-		Quantity: position.Size,
+		Symbol:     symbol,
+		Type:       core.OrderTypeMarket,
+		Side:       side,
+		Quantity:   position.Size,
+		Leverage:   position.Leverage,   // 使用持仓的杠杆
+		MarginMode: position.MarginMode, // 使用持仓的保证金模式
 		Metadata: map[string]interface{}{
 			"reduce_only":  true,
 			"close_reason": "signal_triggered",
@@ -448,52 +489,112 @@ func (m *Manager) CheckTrailingStop(symbol string, currentPrice float64) (bool, 
 
 	profit := state.UnrealizedPnLPercent
 
-	// 确定当前级别和回撤阈值
+	// 确定当前级别和回调比例
 	var level int
-	var callbackPercent float64
+	var callbackRate float64 // Binance TRAILING_STOP_MARKET 使用的回调比例
 
-	if profit > 4.8 {
-		level = 4
-		callbackPercent = 0.008 // 0.8%
-	} else if profit > 1.8 {
+	if profit >= 1.8 {
 		level = 3
-		callbackPercent = 0.0068 // 0.68%
-	} else if profit > 1.0 {
+		callbackRate = 0.68 // 0.68%
+	} else if profit >= 1.0 {
 		level = 2
-		callbackPercent = 0.0055 // 0.55%
-	} else if profit > 0.6 {
+		callbackRate = 0.55 // 0.55%
+	} else if profit >= 0.6 {
 		level = 1
-		callbackPercent = 0.005 // 0.5%
+		callbackRate = 0.5 // 0.5%
 	} else {
-		// 盈利不足，不启用跟踪止盈
+		// 盈利不足 0.6%，不启用跟踪止盈
 		return false, nil
 	}
 
-	// 如果进入更高级别，取消前一级
+	// 如果进入更高级别，需要撤销旧的跟踪止盈单，设置新的
 	if level > state.TrailingStopLevel {
+		logger.Info("Trailing stop level upgraded",
+			zap.String("symbol", symbol),
+			zap.Int("old_level", state.TrailingStopLevel),
+			zap.Int("new_level", level),
+			zap.Float64("profit", profit),
+		)
+
+		// 撤销旧的跟踪止盈单（如果存在）
+		if state.StopLossOrderID != "" {
+			ctx := context.Background()
+			_ = m.executor.CancelOrder(ctx, symbol, state.StopLossOrderID)
+			state.StopLossOrderID = ""
+		}
+
+		// 设置新的 TRAILING_STOP_MARKET 单
+		if err := m.setTrailingStopOrder(symbol, state, callbackRate); err != nil {
+			logger.Error("Failed to set trailing stop order",
+				zap.String("symbol", symbol),
+				zap.Int("level", level),
+				zap.Error(err),
+			)
+		}
+
 		state.TrailingStopLevel = level
 		state.HighestProfit = profit
 		state.HighestProfitPrice = currentPrice
-		return false, nil
 	}
 
-	// 计算回撤
-	drawdown := state.HighestProfit - profit
-
-	// 检查是否触发回撤止盈
-	if drawdown >= callbackPercent*100 { // 转换为百分比
-		order, _ := m.createCloseOrder(symbol, state, currentPrice)
-		if order != nil {
-			order.Metadata["close_reason"] = fmt.Sprintf("trailing_stop_level_%d", level)
-			order.Metadata["highest_profit"] = state.HighestProfit
-			order.Metadata["current_profit"] = profit
-		}
-
-		delete(m.positions, symbol)
-		return true, order
+	// 更新最高盈利
+	if profit > state.HighestProfit {
+		state.HighestProfit = profit
+		state.HighestProfitPrice = currentPrice
 	}
 
 	return false, nil
+}
+
+// setTrailingStopOrder 设置跟踪止盈单
+func (m *Manager) setTrailingStopOrder(symbol string, state *PositionState, callbackRate float64) error {
+	ctx := context.Background()
+
+	// 确定平仓方向
+	var side core.OrderSide
+	if state.Side == core.PositionSideLong {
+		side = core.OrderSideSell
+	} else {
+		side = core.OrderSideBuy
+	}
+
+	// 创建 TRAILING_STOP_MARKET 订单
+	// 注意：Binance 的 callbackRate 需要乘以100（0.5% = 0.5）
+	order := &core.Order{
+		Symbol:   symbol,
+		Type:     core.OrderTypeTrailingStop,
+		Side:     side,
+		Quantity: state.Size,
+		Metadata: map[string]interface{}{
+			"callback_rate":  callbackRate, // 0.5, 0.55, 0.68
+			"close_position": true,         // 平掉全部仓位
+			"order_type":     "trailing_stop",
+		},
+	}
+
+	logger.Info("Setting trailing stop order",
+		zap.String("symbol", symbol),
+		zap.String("side", string(side)),
+		zap.Float64("quantity", order.Quantity),
+		zap.Float64("callback_rate", callbackRate),
+	)
+
+	// 提交订单
+	resultOrder, err := m.executor.PlaceOrder(ctx, order)
+	if err != nil {
+		return fmt.Errorf("place trailing stop order failed: %w", err)
+	}
+
+	// 保存订单ID（替换原来的止损单ID）
+	state.StopLossOrderID = resultOrder.ID
+
+	logger.Info("Trailing stop order placed successfully",
+		zap.String("symbol", symbol),
+		zap.String("order_id", resultOrder.ID),
+		zap.Float64("callback_rate", callbackRate),
+	)
+
+	return nil
 }
 
 // SetStopLoss 设置止损单（开仓或加仓后调用）

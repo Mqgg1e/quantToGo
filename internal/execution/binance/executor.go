@@ -122,6 +122,21 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 		// req.WorkingType = WorkingTypeMark
 	}
 
+	// 跟踪止损单：TRAILING_STOP_MARKET 需要 callbackRate
+	if order.Type == core.OrderTypeTrailingStop && order.Metadata != nil {
+		if callbackRate, ok := order.Metadata["callback_rate"].(float64); ok {
+			// Binance API 的 callbackRate: 0.1 到 10，其中 1 表示 1%
+			// 我们的 callbackRate 是小数（0.5 表示 0.5%）
+			req.CallbackRate = fmt.Sprintf("%.2f", callbackRate)
+		}
+
+		// 检查是否平掉全部仓位
+		if closePosition, ok := order.Metadata["close_position"].(bool); ok && closePosition {
+			req.ClosePosition = true
+			useClosePosition = true // 不设置 quantity
+		}
+	}
+
 	// 只减仓标志（平仓订单）
 	// 注意：使用 closePosition 时不能同时设置 reduceOnly
 	if order.Metadata != nil && !useClosePosition {

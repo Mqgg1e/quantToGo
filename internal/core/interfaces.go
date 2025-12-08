@@ -159,11 +159,12 @@ type PositionManager interface {
 type OrderType string
 
 const (
-	OrderTypeMarket     OrderType = "MARKET"      // 市价单
-	OrderTypeLimit      OrderType = "LIMIT"       // 限价单
-	OrderTypeStopMarket OrderType = "STOP_MARKET" // 市价止损单
-	OrderTypeStopLimit  OrderType = "STOP_LIMIT"  // 限价止损单
-	OrderTypeTakeProfit OrderType = "TAKE_PROFIT" // 止盈单
+	OrderTypeMarket       OrderType = "MARKET"               // 市价单
+	OrderTypeLimit        OrderType = "LIMIT"                // 限价单
+	OrderTypeStopMarket   OrderType = "STOP_MARKET"          // 市价止损单
+	OrderTypeStopLimit    OrderType = "STOP_LIMIT"           // 限价止损单
+	OrderTypeTakeProfit   OrderType = "TAKE_PROFIT"          // 止盈单
+	OrderTypeTrailingStop OrderType = "TRAILING_STOP_MARKET" // 跟踪止损市价单
 )
 
 // OrderSide 订单方向

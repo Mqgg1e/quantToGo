@@ -1,6 +1,7 @@
 package binance
 
 import (
+	"fmt"
 	"time"
 
 	"goQuant/internal/core"
@@ -281,6 +282,8 @@ func FromOrderType(orderType core.OrderType) FuturesOrderType {
 		return OrderTypeStop // STOP 是限价止损单
 	case core.OrderTypeTakeProfit:
 		return OrderTypeTakeProfitMarket
+	case core.OrderTypeTrailingStop:
+		return OrderTypeTrailingStopMarket
 	default:
 		return OrderTypeMarket
 	}
@@ -327,13 +330,39 @@ func PositionRiskToPosition(pos *PositionRisk) *core.Position {
 	unrealizedPnL, _ := parseFloat(pos.UnRealizedProfit)
 	leverage, _ := parseInt(pos.Leverage)
 
+	// 调试：打印原始数据
+	if posAmt != 0 {
+		fmt.Printf("[DEBUG] Position: symbol=%s, posAmt=%f, positionSide=%s\n",
+			pos.Symbol, posAmt, pos.PositionSide)
+	}
+
+	// 判断持仓方向
 	var side core.PositionSide
-	if posAmt > 0 {
+
+	// 优先使用 PositionSide 字段（对冲模式下该字段明确指示方向）
+	if pos.PositionSide == "LONG" {
 		side = core.PositionSideLong
-	} else if posAmt < 0 {
+		if posAmt < 0 {
+			posAmt = -posAmt // 确保为正数
+		}
+	} else if pos.PositionSide == "SHORT" {
 		side = core.PositionSideShort
-		posAmt = -posAmt // 转为正数
+		if posAmt < 0 {
+			posAmt = -posAmt // 确保为正数
+		}
 	} else {
+		// 单向持仓模式（PositionSide="BOTH"），根据 posAmt 正负判断
+		if posAmt > 0 {
+			side = core.PositionSideLong
+		} else if posAmt < 0 {
+			side = core.PositionSideShort
+			posAmt = -posAmt // 转为正数
+		} else {
+			return nil // 无持仓
+		}
+	}
+
+	if posAmt == 0 {
 		return nil // 无持仓
 	}
 

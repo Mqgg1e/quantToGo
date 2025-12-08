@@ -81,6 +81,8 @@ type RiskLimitsConfig struct {
 type PositionSizingConfig struct {
 	Method       string  `mapstructure:"method"`        // "fixed", "risk_based", "kelly"
 	FixedPercent float64 `mapstructure:"fixed_percent"` // 固定百分比（如20%）
+	OpenPercent  float64 `mapstructure:"open_percent"`  // 开仓百分比
+	AddPercent   float64 `mapstructure:"add_percent"`   // 加仓百分比
 	RiskPercent  float64 `mapstructure:"risk_percent"`  // 风险百分比
 }
 

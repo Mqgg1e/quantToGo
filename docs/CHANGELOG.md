@@ -6,6 +6,386 @@
 
 ## 2025-12-06
 
+### ✅ 修复反向平仓时旧止损单未取消（Issue #1145）
+
+#### 问题
+持有空单时出现多单信号，反向平仓成功执行，但：
+1. 旧的止损单没有被取消
+2. 后续触发 `ReduceOnly Order is rejected` 错误（旧止损单仍在尝试平仓）
+3. 新仓位未开（这是当前设计行为）
+
+#### 原因
+反向平仓逻辑中只生成了平仓订单，**没有取消持仓关联的止损单**（StopLossOrderID）
+
+#### 修复
+在反向平仓时先取消旧止损单：
+```go
+if needClose {
+    // 取消旧的止损单（如果存在）
+    if position.StopLossOrderID != "" {
+        ctx := context.Background()
+        err := m.executor.CancelOrder(ctx, symbol, position.StopLossOrderID)
+        if err != nil {
+            logger.Warn("Failed to cancel stop loss order on reverse close", ...)
+        } else {
+            logger.Info("Cancelled stop loss order on reverse close", ...)
+        }
+    }
+    
+    // 生成平仓订单
+    closeOrder, err := m.createCloseOrder(symbol, position, currentPrice)
+    // ...
+}
+```
+
+**关于新仓位未开**：
+- 当前设计：反向信号只平仓，不立即开新仓
+- 原因：避免平仓和开仓订单在交易所端冲突
+- 等持仓清空后（UpdatePosition 收到 Size=0），下次信号才会开新仓
+- 如需改为立即开新仓，需要调整 ProcessSignal 逻辑返回 [closeOrder, openOrder]
+
+**修改文件**：`internal/position/manager.go`
+
+---
+
+### ✅ 修复反向平仓订单缺少杠杆信息（Issue #1128）
+
+#### 问题
+持有空单时出现多单信号触发反向平仓，但平仓订单被风险检查拒绝：
+```
+error: "risk check failed: invalid leverage: 0"
+```
+
+#### 原因
+`createCloseOrder` 函数创建平仓订单时只设置了基本字段（symbol, type, side, quantity），**没有设置 leverage 和 marginMode**，导致订单杠杆为 0。
+
+#### 修复
+在平仓订单中添加持仓的杠杆和保证金模式：
+```go
+order := &core.Order{
+    Symbol:     symbol,
+    Type:       core.OrderTypeMarket,
+    Side:       side,
+    Quantity:   position.Size,
+    Leverage:   position.Leverage,   // 使用持仓的杠杆
+    MarginMode: position.MarginMode, // 使用持仓的保证金模式
+    Metadata: map[string]interface{}{
+        "reduce_only":  true,
+        "close_reason": "signal_triggered",
+    },
+}
+```
+
+**修改文件**：`internal/position/manager.go`
+
+---
+
+### 📋 架构审查：策略更换成本分析
+
+#### 目的
+确认框架是否保持"策略→信号→订单"的清晰分层，评估更换策略的工作量。
+
+#### 审查结果
+**架构状态**：✅ 基本清晰，但存在策略耦合
+
+**接口分层**：
+- ✅ 数据模块 → 策略模块：通过 `KlineData` 接口解耦
+- ✅ 策略模块 → 仓位管理：通过 `TradingSignal` 标准信号解耦
+- ⚠️ 仓位管理内部：包含当前策略特定的加仓逻辑
+
+**发现的策略耦合**（`internal/position/manager.go`）：
+1. **第93-134行**：硬编码的加仓检查逻辑
+   - `add_position_eligible` Metadata 标志检查
+   - 10分钟加仓时间窗口（适配当前策略的3x3分钟K线）
+   - 加仓次数限制为1次
+2. **第30行**：`AddPositionCount` 字段假设只加仓1次
+
+**strategy 目录文件验证**：
+- ✅ `adapter.go` - 通用适配器，无策略特定逻辑
+- ✅ `signal.go` - 通用信号辅助函数
+- ✅ `indicators.go` - 通用技术指标库（EMA, MACD, VWAP, SMA, ATR, RSI）
+- ❌ `macd_ema_strategy.go` - 当前策略实现（需替换）
+
+#### 更换策略需要修改的文件
+**必须修改**（2个文件）：
+- `internal/strategy/your_new_strategy.go` - 新策略实现
+- `cmd/live-trading/main.go` - 1行代码改动
+
+**可能需要修改**（如果加仓规则不同）：
+- `internal/position/manager.go` - 加仓时间窗口、次数限制
+
+**无需修改**（框架层）：
+- `internal/core/interfaces.go`
+- `internal/execution/binance/`
+- `internal/dataManager/v2/`
+- `internal/strategy/adapter.go`
+
+#### 改进建议
+将加仓规则参数化到配置文件，避免硬编码：
+```yaml
+position:
+  add_position:
+    max_count: 1           # 最大加仓次数
+    time_window: 600       # 时间窗口（秒）
+    use_metadata_flag: true # 是否检查 Metadata 标志
+```
+
+---
+
+### ✅ 修复仓位计算和加仓时机问题（Issue #1031）
+
+#### 问题1：仓位量使用5%而非20%/40%
+**原因**：
+- `CalculatePositionSize` 函数硬编码了 0.20 和 0.40
+- `config.yaml` 中 `max_position_size: 0.05` 限制了最大仓位
+
+**修复**：
+- 添加 `OpenPercent` 和 `AddPercent` 字段到 `PositionSizingConfig`
+- 修改 `max_position_size` 从 0.05 → 0.50
+
+#### 问题2：加仓时机无限制
+**原因**：每次满足3个交叉条件都可以加仓
+
+**修复**：
+- 添加 `OpenTime` 字段到 `PositionState`
+- 只允许在开仓后10分钟内加仓
+
+#### 问题3：持仓方向显示错误
+**原因**：日志使用 `pos.Size` 正负判断方向
+
+**修复**：改为直接使用 `string(pos.Side)`
+
+**修改文件**：
+- `internal/config/config.go`
+- `internal/position/manager.go`
+- `internal/strategy/adapter.go`
+- `config/config.yaml`
+
+---
+
+### ✅ 修复持仓方向判断错误（OPEN_SHORT 变成 LONG 持仓）
+
+#### 问题
+信号和实际持仓方向相反：
+```json
+{"msg":"Signal generated","signal_type":"OPEN_SHORT"}  // 做空信号
+{"msg":"Position update","side":"LONG"}                // 但持仓是多单！
+```
+
+#### 根本原因
+持仓方向判断只依赖 `positionAmt` 的正负，但在某些情况下（可能是对冲模式或测试网行为），Binance 返回的数据中：
+- `positionSide` 字段明确指示方向（"LONG" 或 "SHORT"）
+- `positionAmt` 可能都是正数
+
+**之前的逻辑**：
+```go
+// ❌ 只看 posAmt 正负
+if posAmt > 0 {
+    side = LONG
+} else if posAmt < 0 {
+    side = SHORT
+}
+```
+
+#### 解决方案
+**优先使用 `PositionSide` 字段判断方向**：
+
+```go
+// ✅ 优先使用 positionSide 字段
+if pos.PositionSide == "LONG" {
+    side = LONG
+    posAmt = abs(posAmt)
+} else if pos.PositionSide == "SHORT" {
+    side = SHORT
+    posAmt = abs(posAmt)
+} else {
+    // 单向持仓模式（BOTH），才用 posAmt 正负判断
+    if posAmt > 0:
+        side = LONG
+    else:
+        side = SHORT
+}
+```
+
+**逻辑说明**：
+1. **对冲模式**：`positionSide` 为 "LONG" 或 "SHORT"，`posAmt` 都可能是正数
+2. **单向模式**：`positionSide` 为 "BOTH"，`posAmt` 正数=多单，负数=空单
+
+**修改文件**：
+- `internal/execution/binance/models.go` - PositionRiskToPosition 函数
+
+**调试日志**：
+添加了调试输出，可以看到 Binance 返回的原始数据：
+```
+[DEBUG] Position: symbol=ETHUSDT, posAmt=0.425, positionSide=SHORT
+```
+
+---
+
+### ✅ 修复持仓信息更新时机问题（重复开仓）
+
+#### 问题
+已有持仓时，收到同向加仓信号会被错误地当作开仓执行：
+- 09:34 开空单（2个交叉）✅
+- 09:56 收到3个交叉信号 → 应该加仓，但被当作开仓 ❌
+
+#### 根本原因
+持仓信息更新时机错误：
+
+```go
+// ❌ 错误的流程
+1. ProcessSignal(signal) → 此时 Manager 没有持仓信息
+2. executeOrder()
+3. updatePositions() → 持仓信息才更新
+```
+
+在第1步 ProcessSignal 时，Manager 还不知道有持仓，所以判断为"无持仓"，执行开仓而不是加仓。
+
+#### 解决方案
+**在 ProcessSignal 之前先更新持仓**：
+
+```go
+// ✅ 正确的流程
+1. updatePositions() → 先获取最新持仓
+2. ProcessSignal(signal) → 此时有正确的持仓信息
+3. executeOrder()
+4. updatePositions() → 再次更新
+```
+
+**修改文件**：
+- `internal/strategy/adapter.go` - OnKline 方法
+
+**效果**：
+- ✅ 第二次同向信号会正确识别为加仓
+- ✅ 日志会显示 "Add position condition met"
+- ✅ 加仓次数限制生效
+
+---
+
+### ✅ 重新实现跟踪止盈（使用 TRAILING_STOP_MARKET 订单）
+
+#### 需求
+用户要求：
+1. 开仓时设置固定止损 0.6%
+2. 盈利达到 0.6% → 设置 TRAILING_STOP_MARKET 单（回调 0.5%）
+3. 盈利达到 1.0% → 撤销上一级，设置新的（回调 0.55%）
+4. 盈利达到 1.8% → 撤销上一级，设置新的（回调 0.68%）
+
+#### 之前的实现
+使用程序内监控，检查回撤触发时提交市价平仓单。
+
+#### 新实现
+使用真实的 Binance TRAILING_STOP_MARKET 订单：
+
+```go
+// 盈利达到阈值时
+func CheckTrailingStop(symbol, currentPrice) {
+    profit := UnrealizedPnLPercent
+    
+    // 确定级别
+    if profit >= 1.8:
+        level = 3, callbackRate = 0.68
+    else if profit >= 1.0:
+        level = 2, callbackRate = 0.55
+    else if profit >= 0.6:
+        level = 1, callbackRate = 0.5
+    
+    // 升级时撤销旧单
+    if level > TrailingStopLevel:
+        CancelOrder(StopLossOrderID)
+        setTrailingStopOrder(callbackRate)
+        TrailingStopLevel = level
+}
+
+// 创建跟踪止盈单
+func setTrailingStopOrder(callbackRate) {
+    order = {
+        Type: TRAILING_STOP_MARKET,
+        CallbackRate: callbackRate,    // 0.5, 0.55, 0.68
+        ClosePosition: true,            // 平掉全部
+    }
+    PlaceOrder(order)
+}
+```
+
+**优点**：
+- ✅ 即使程序崩溃，订单仍在交易所生效
+- ✅ 由交易所自动跟踪最高价并回调
+- ✅ 更可靠，延迟更低
+
+**修改文件**：
+- `internal/position/manager.go` - CheckTrailingStop + setTrailingStopOrder
+- `internal/core/interfaces.go` - 添加 OrderTypeTrailingStop
+- `internal/execution/binance/models.go` - 类型映射
+- `internal/execution/binance/executor.go` - TRAILING_STOP_MARKET 参数处理
+
+---
+
+### ✅ 修复反向信号导致的重复开仓问题
+
+#### 问题
+已有持仓时，收到反向信号会错误地重复开仓。例如：
+- 持有多单 → 收到空单信号 → 应该先平多再开空
+- 但实际：平仓订单提交后，立即又收到相同信号 → 重复开仓
+
+#### 根本原因
+反向信号处理逻辑中，提交平仓订单后立即删除了内存中的持仓记录：
+
+```go
+// ❌ 错误：立即删除持仓状态
+if needClose {
+    closeOrder := createCloseOrder(...)
+    delete(m.positions, symbol)  // ← 这里删除太早了
+    openOrder := createOpenOrder(...)
+    return [closeOrder, openOrder]
+}
+```
+
+问题在于：
+1. 平仓订单提交后，`m.positions[symbol]` 被删除
+2. 但交易所的持仓可能还未清空（订单未成交）
+3. 下次信号到来时，`hasPosition = false`
+4. 误认为无持仓，执行开仓 → 导致重复开仓
+
+#### 解决方案
+
+**不要立即删除持仓状态，改为等待持仓自然清空**：
+
+```go
+// ✅ 正确：只返回平仓订单，不立即删除持仓
+if needClose {
+    closeOrder := createCloseOrder(...)
+    // 不删除 m.positions[symbol]
+    // 等 UpdatePosition 收到 Size=0 后会自动删除
+    return [closeOrder]  // 只返回平仓订单
+}
+```
+
+**新的流程**：
+1. 收到反向信号 → 生成平仓订单
+2. 保留持仓状态不删除
+3. 平仓订单成交后，`UpdatePosition` 收到 `Size=0`
+4. `UpdatePosition` 内部自动 `delete(m.positions, symbol)`
+5. 下次信号到来时，持仓已真正清空，可以安全开仓
+
+**优点**：
+- ✅ 避免平仓期间的重复开仓
+- ✅ 持仓状态与交易所同步
+- ✅ 逻辑更清晰，状态管理更安全
+
+**修改文件**：
+- `internal/position/manager.go` - ProcessSignal 方法
+
+**测试验证**：
+观察日志，反向信号应该只生成平仓订单，等持仓清空后才开新仓：
+```json
+{"msg":"Closing position due to reverse signal, will open new position after close confirmed"}
+{"msg":"Position update","size":0}  // 持仓清空
+{"msg":"Signal generated","signal_type":"OPEN_SHORT"}  // 下次信号才开仓
+```
+
+---
+
 ### ✅ 修复编译错误 - 订单类型常量名称
 
 #### 问题

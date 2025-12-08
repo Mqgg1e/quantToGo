@@ -60,7 +60,7 @@ strategy:
 position:
   default_leverage: 5
   default_margin_mode: "ISOLATED"  # ISOLATED | CROSS
-  max_position_size: 0.05  # 最大仓位占总资金%
+  max_position_size: 0.50  # 最大仓位占总资金% (需要>=40%才能让加仓生效)
 
   # 风险限制
   risk_limits:

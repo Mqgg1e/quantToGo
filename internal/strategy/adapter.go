@@ -90,7 +90,10 @@ func (a *Adapter) OnKline(kline *v2.KlineData) {
 		zap.String("reason", signal.Reason),
 	)
 
-	// 3. 仓位管理器处理信号，生成订单
+	// 3. 更新持仓状态（在 ProcessSignal 之前，确保有最新持仓信息）
+	a.updatePositions(ctx)
+
+	// 4. 仓位管理器处理信号，生成订单
 	orders, err := a.positionMgr.ProcessSignal(signal, kline.GetClosePrice())
 	if err != nil {
 		a.symbolLogger.Error("Position manager error", zap.Error(err))
@@ -102,7 +105,7 @@ func (a *Adapter) OnKline(kline *v2.KlineData) {
 		return
 	}
 
-	// 4. 执行订单
+	// 5. 执行订单
 	for _, order := range orders {
 		err := a.executeOrder(ctx, order)
 		if err != nil {
@@ -113,7 +116,7 @@ func (a *Adapter) OnKline(kline *v2.KlineData) {
 		}
 	}
 
-	// 5. 更新持仓状态
+	// 6. 再次更新持仓状态（订单执行后）
 	a.updatePositions(ctx)
 }
 
@@ -230,12 +233,9 @@ func (a *Adapter) updatePositions(ctx context.Context) {
 				)
 			} else {
 				// 记录仓位更新（使用品种专用日志）
-				side := "LONG"
-				if pos.Size < 0 {
-					side = "SHORT"
-				}
+				// pos.Side 已经由 PositionRiskToPosition 正确设置
 				a.symbolLogger.Info("Position update",
-					zap.String("side", side),
+					zap.String("side", string(pos.Side)),
 					zap.Float64("size", pos.Size),
 					zap.Float64("entry_price", pos.EntryPrice),
 					zap.Float64("current_price", pos.CurrentPrice),
