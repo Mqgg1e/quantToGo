@@ -6,6 +6,125 @@
 
 ## 2025-12-12
 
+### 🐛 修复 InitFromRestAPI 死锁问题
+
+**问题**: 
+- `InitFromRestAPI` 持有写锁时调用 `executor` 方法
+- `executor` 方法尝试调用 `accountCache.GetBalance()` 获取读锁
+- 造成死锁，程序卡在初始化阶段
+
+**修复**:
+- 修改 `InitFromRestAPI` 执行顺序：
+  1. 先调用 `executor` 方法获取数据（不持锁）
+  2. 再持锁更新缓存
+- 移除 `executor` 方法中对缓存的更新操作，避免循环依赖
+
+**影响文件**:
+- `internal/cache/account_cache.go` - 调整锁的持有时机
+- `internal/execution/binance/executor.go` - 移除缓存更新调用
+
+**测试结果**:
+- ✅ 程序正常启动和初始化
+- ✅ UserDataStream 成功连接
+- ✅ 实时事件正确处理
+- ✅ 手动下单实时反映到缓存
+
+---
+
+### 🎉 Phase 3-5 完成 - 执行层与仓位管理重构
+
+**完成时间**: 2025-12-12 10:30 UTC
+
+**核心变更**:
+
+#### 1. 执行层重构 (`internal/execution/binance/executor.go`)
+- ✅ 移除本地缓存 (`orderCache`, `positionCache`)
+- ✅ 注入 `AccountCache` 依赖
+- ✅ 修改 `NewLiveExecutor` 接受 `accountCache` 参数
+- ✅ 添加 `GetClient()` 方法供 UserDataStream 使用
+- ✅ 添加 `SetAccountCache()` 方法支持后期注入
+- ✅ `PlaceOrder()` 不再缓存订单，等待 UserDataStream 更新
+- ✅ `GetAccount()` 优先从 accountCache 读取余额
+- ✅ `GetPositions()` 优先从 accountCache 读取持仓
+- ✅ `GetOpenOrders()` 优先从 accountCache 读取，支持全量同步
+- ✅ `GetOrder()` 从 accountCache 读取并可选刷新
+- ✅ `CancelOrder()` 从 accountCache 获取订单信息
+
+**影响**:
+- 所有订单和持仓数据由 UserDataStream 实时更新
+- 执行层变为无状态，数据统一由 AccountCache 管理
+- 支持断连重连后自动恢复状态
+
+#### 2. 仓位管理重构 (`internal/position/manager.go`)
+- ✅ 注入 `AccountCache` 依赖
+- ✅ 修改 `NewManager` 接受 `accountCache` 参数
+- ✅ `createOpenOrder()` 从 accountCache 获取余额
+- ✅ `createAddOrder()` 继承开仓逻辑使用缓存
+- ✅ 移除对 `executor.GetAccount()` 的调用
+
+**优势**:
+- 避免重复 REST API 调用
+- 余额数据实时准确（UserDataStream 更新）
+- 策略模块完全解耦持仓数据获取
+
+#### 3. 主程序集成 (`cmd/live-trading/main.go`, `cmd/test-userdata-stream/main.go`)
+- ✅ 创建 `AccountCache` 实例
+- ✅ 通过 `InitFromRestAPI()` 初始化缓存
+- ✅ 启动 `UserDataStream` 实时更新缓存
+- ✅ 注入缓存到执行器和仓位管理器
+- ✅ 优雅关闭时停止 UserDataStream
+
+**启动流程**:
+```
+1. 加载配置
+2. 创建 AccountCache
+3. 创建执行器（注入 AccountCache）
+4. 从 REST API 初始化缓存
+5. 启动 UserDataStream
+6. 设置杠杆和保证金模式
+7. 创建仓位管理器（注入 AccountCache）
+8. 启动数据流和策略
+```
+
+#### 4. 测试验证
+- ✅ 所有单元测试通过 (`go test ./internal/cache/...`)
+- ✅ 编译成功 (`go build ./...`)
+- ✅ 可执行文件生成成功
+  - `bin/live-trading` (实盘交易程序)
+  - `bin/test-userdata-stream` (UserDataStream 测试程序)
+
+**测试覆盖**:
+- AccountCache 并发读写
+- 版本控制防止乱序
+- 初始化从 REST API 同步
+- 余额、持仓、订单操作
+
+#### 5. 架构优化成果
+
+**Before**:
+```
+Executor -> Local Cache (orderCache, positionCache)
+Manager  -> Local Cache (positions) + executor.GetAccount()
+```
+
+**After**:
+```
+UserDataStream -> AccountCache <- Executor
+                      ↑
+                   Manager
+```
+
+**优势**:
+1. 统一缓存管理，避免数据不一致
+2. 实时更新（WebSocket 事件驱动）
+3. 减少 REST API 调用（性能优化）
+4. 模块解耦，易于测试和维护
+5. 支持断连自动恢复
+
+**下一步**: Week 6 - WebSocket 下单实现（可选优化）
+
+---
+
 ### 🔧 优化缓存版本控制逻辑
 
 **问题**: 

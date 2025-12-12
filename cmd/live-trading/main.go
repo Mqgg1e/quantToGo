@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"goQuant/internal/cache"
 	"goQuant/internal/config"
 	"goQuant/internal/core"
 	v2 "goQuant/internal/dataManager/v2"
@@ -48,16 +49,37 @@ func main() {
 		zap.Int("leverage", cfg.Position.DefaultLeverage),
 	)
 
-	// 2. 创建币安执行器
+	// 2. 创建账户缓存
+	accountCache := cache.NewAccountCache()
+	logger.Info("✅ Account cache created")
+
+	// 3. 创建币安执行器（注入账户缓存）
 	executor := binance.NewLiveExecutor(
 		cfg.Execution.Binance.APIKey,
 		cfg.Execution.Binance.SecretKey,
 		cfg.Execution.Binance.BaseURL,
+		accountCache,
 	)
 
 	ctx := context.Background()
 
-	// 3. 设置杠杆和保证金模式（针对要交易的每个交易对）
+	// 4. 从 REST API 初始化缓存（全量同步）
+	if err := accountCache.InitFromRestAPI(ctx, executor); err != nil {
+		logger.Fatal("Failed to initialize account cache", zap.Error(err))
+	}
+	logger.Info("✅ Account cache initialized from REST API")
+
+	// 5. 启动 UserDataStream（实时更新缓存）
+	userStream := binance.NewUserDataStream(executor.GetClient(), accountCache, executor)
+	go func() {
+		if err := userStream.Start(ctx); err != nil {
+			logger.Error("UserDataStream error", zap.Error(err))
+		}
+	}()
+	defer userStream.Stop()
+	logger.Info("✅ UserDataStream started")
+
+	// 6. 设置杠杆和保证金模式（针对要交易的每个交易对）
 	for _, sub := range cfg.Data.Subscriptions {
 		symbol := sub.Symbol
 
@@ -73,11 +95,11 @@ func main() {
 		}
 	}
 
-	// 4. 创建仓位管理器
-	posMgr := position.NewManager(&cfg.Position, executor)
+	// 7. 创建仓位管理器（注入账户缓存）
+	posMgr := position.NewManager(&cfg.Position, executor, accountCache)
 	log.Printf("✅ Position manager created")
 
-	// 5. 创建数据处理器
+	// 8. 创建数据处理器
 	processor, err := v2.NewEnhancedMultiKlineProcessor(
 		cfg.Data.DatabaseDir,
 		cfg.Data.ProxyURL,
@@ -89,7 +111,7 @@ func main() {
 
 	log.Printf("✅ Data processor created")
 
-	// 6. 为每个订阅创建策略和适配器
+	// 9. 为每个订阅创建策略和适配器
 
 	for _, sub := range cfg.Data.Subscriptions {
 		symbol := sub.Symbol

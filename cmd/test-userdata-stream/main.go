@@ -53,8 +53,8 @@ func main() {
 	// 2. 初始化缓存（从 REST API 获取当前状态）
 	fmt.Println("2️⃣  Initializing cache from REST API...")
 
-	// 创建执行器
-	executor := binance.NewLiveExecutor(apiKey, secretKey, baseURL)
+	// 创建执行器（注入账户缓存）
+	executor := binance.NewLiveExecutor(apiKey, secretKey, baseURL, accountCache)
 
 	// 使用 InitFromRestAPI 方法初始化缓存
 	if err := accountCache.InitFromRestAPI(ctx, executor); err != nil {

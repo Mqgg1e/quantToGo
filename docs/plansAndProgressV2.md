@@ -269,6 +269,87 @@ go run cmd/test-userdata-stream/main.go
 
 ✅ **Phase 2-3 完成，准备进入 Week 3: 执行层重构**
 
+---
+
+**进度更新 (121225 - 1030 UTC)**:
+
+✅ **Phase 3-5 完成**: 执行层与仓位管理重构全部完成
+
+**核心成果**:
+1. ✅ 执行层重构 (`internal/execution/binance/executor.go`)
+   - 移除本地缓存 (orderCache, positionCache)
+   - 注入 AccountCache 依赖
+   - 所有数据读取优先使用 AccountCache
+   - 添加 GetClient() 和 SetAccountCache() 方法
+
+2. ✅ 仓位管理重构 (`internal/position/manager.go`)
+   - 注入 AccountCache 依赖
+   - createOpenOrder() 从缓存获取余额
+   - 移除对 executor.GetAccount() 的 REST API 调用
+
+3. ✅ 主程序集成
+   - `cmd/live-trading/main.go` - 生产环境
+   - `cmd/test-userdata-stream/main.go` - 测试程序
+   - 完整启动流程：创建缓存 → 初始化 → 启动 UserDataStream
+
+4. ✅ 测试验证
+   - 所有单元测试通过 (9/9)
+   - 编译成功无错误
+   - 可执行文件生成成功
+
+**架构改进**:
+```
+Before: Executor/Manager -> Local Cache -> REST API
+After:  UserDataStream -> AccountCache <- Executor/Manager
+```
+
+**优势**:
+- 统一缓存管理，数据一致性保证
+- 实时更新（WebSocket 事件驱动）
+- 减少 REST API 调用（性能提升）
+- 模块完全解耦，易于维护
+- 支持断连自动恢复状态
+
+**文档更新**:
+- ✅ `docs/version2.md` - Week 3-5 标记完成
+- ✅ `docs/CHANGELOG.md` - 添加详细变更记录
+- ✅ `docs/API_REFERENCE.md` - 更新 API 签名
+- 🔄 `docs/plansAndProgressV2.md` - 本次更新
+
+**下一步**: Week 6 - WebSocket 下单实现（可选优化）
+
+---
+
+**🎉 Week 3-5 重构完成总结** (121225):
+
+**已完成的核心任务**:
+1. ✅ 执行层重构 - 移除本地缓存，统一使用 AccountCache
+2. ✅ 仓位管理重构 - 从缓存获取余额，避免 REST API 调用
+3. ✅ 主程序集成 - 完整启动流程实现
+4. ✅ 测试验证 - 所有单元测试通过，编译成功
+
+**关键改进**:
+- 🔄 实时数据更新 (UserDataStream → AccountCache)
+- ⚡ 性能优化 (减少 REST API 调用)
+- 🔧 模块解耦 (策略、执行、缓存独立)
+- 🛡️ 容错能力 (断连自动恢复)
+
+**剩余任务** (可选):
+- Week 6: WebSocket 下单实现 (性能进一步优化)
+
+**最终状态** (121225 - 1055 UTC):
+- ✅ 所有核心功能完成并测试通过
+- ✅ 死锁问题已修复
+- ✅ 程序稳定运行
+- ✅ 实时事件处理正常
+- ✅ 文档完整更新
+
+**测试验证**:
+```
+程序正常启动 → 初始化成功 → UserDataStream 连接 → 
+实时接收订单事件 → 实时接收账户更新 → 缓存正确更新
+```
+
 ####
 
 

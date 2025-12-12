@@ -7,24 +7,33 @@ import (
 	"sync"
 	"time"
 
+	"goQuant/internal/cache"
 	"goQuant/internal/core"
 )
 
 // LiveExecutor 币安期货实盘执行器
 type LiveExecutor struct {
-	client        *Client
-	mu            sync.RWMutex
-	orderCache    map[string]*core.Order    // 本地订单缓存 key: clientOrderId
-	positionCache map[string]*core.Position // 持仓缓存 key: symbol
+	client       *Client
+	accountCache *cache.AccountCache // 账户缓存（替代本地缓存）
+	mu           sync.RWMutex        // 保护非缓存字段的锁
 }
 
 // NewLiveExecutor 创建实盘执行器
-func NewLiveExecutor(apiKey, secretKey, baseURL string) *LiveExecutor {
+func NewLiveExecutor(apiKey, secretKey, baseURL string, accountCache *cache.AccountCache) *LiveExecutor {
 	return &LiveExecutor{
-		client:        NewClient(apiKey, secretKey, baseURL),
-		orderCache:    make(map[string]*core.Order),
-		positionCache: make(map[string]*core.Position),
+		client:       NewClient(apiKey, secretKey, baseURL),
+		accountCache: accountCache,
 	}
+}
+
+// GetClient 获取币安客户端（用于 UserDataStream）
+func (e *LiveExecutor) GetClient() *Client {
+	return e.client
+}
+
+// SetAccountCache 设置账户缓存（用于后期注入）
+func (e *LiveExecutor) SetAccountCache(cache *cache.AccountCache) {
+	e.accountCache = cache
 }
 
 // ========== 实现 core.Executor 接口 ==========
@@ -162,21 +171,16 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 	resultOrder.Metadata["leverage"] = order.Leverage
 	resultOrder.Metadata["margin_mode"] = order.MarginMode
 
-	// 缓存订单
-	e.mu.Lock()
-	e.orderCache[resultOrder.ID] = resultOrder
-	e.mu.Unlock()
+	// 不再缓存订单，等待 UserDataStream 更新
+	// UserDataStream 会实时接收 ORDER_TRADE_UPDATE 事件并更新缓存
 
 	return resultOrder, nil
 }
 
 // CancelOrder 撤单
 func (e *LiveExecutor) CancelOrder(ctx context.Context, symbol, orderID string) error {
-	// 从缓存获取订单
-	e.mu.RLock()
-	order, exists := e.orderCache[orderID]
-	e.mu.RUnlock()
-
+	// 从账户缓存获取订单
+	order, exists := e.accountCache.GetOrder(orderID)
 	if !exists {
 		return fmt.Errorf("order not found in cache: %s", orderID)
 	}
@@ -191,32 +195,38 @@ func (e *LiveExecutor) CancelOrder(ctx context.Context, symbol, orderID string) 
 
 // GetOrder 查询订单
 func (e *LiveExecutor) GetOrder(ctx context.Context, symbol, orderID string) (*core.Order, error) {
-	// 先从缓存查询
-	e.mu.RLock()
-	order, exists := e.orderCache[orderID]
-	e.mu.RUnlock()
-
+	// 先从账户缓存查询
+	order, exists := e.accountCache.GetOrder(orderID)
 	if exists {
-		// 从API刷新状态
+		// 从API刷新状态（可选，因为UserDataStream会实时更新）
 		binanceOrderID, ok := order.Metadata["binance_order_id"].(int64)
 		if ok {
 			resp, err := e.client.GetOrder(ctx, symbol, binanceOrderID)
 			if err == nil {
 				updatedOrder := OrderResponseToOrder(resp)
-				e.mu.Lock()
-				e.orderCache[orderID] = updatedOrder
-				e.mu.Unlock()
+				// 让 UserDataStream 更新缓存，或者这里直接更新
+				e.accountCache.UpdateOrder(updatedOrder, time.Now().UnixMilli())
 				return updatedOrder, nil
 			}
 		}
 		return order, nil
 	}
 
+	// 如果缓存中没有，从API查询
 	return nil, fmt.Errorf("order not found: %s", orderID)
 }
 
 // GetOpenOrders 获取未成交订单
 func (e *LiveExecutor) GetOpenOrders(ctx context.Context, symbol string) ([]*core.Order, error) {
+	// 如果指定了 symbol 且缓存中有数据，优先从缓存获取
+	if symbol != "" {
+		cachedOrders := e.accountCache.GetOpenOrders(symbol)
+		if len(cachedOrders) > 0 {
+			return cachedOrders, nil
+		}
+	}
+
+	// 从API获取（用于全量同步或缓存未命中）
 	binanceOrders, err := e.client.GetOpenOrders(ctx, symbol)
 	if err != nil {
 		return nil, err
@@ -226,11 +236,8 @@ func (e *LiveExecutor) GetOpenOrders(ctx context.Context, symbol string) ([]*cor
 	for _, binanceOrder := range binanceOrders {
 		order := OrderResponseToOrder(binanceOrder)
 		orders = append(orders, order)
-
-		// 更新缓存
-		e.mu.Lock()
-		e.orderCache[order.ID] = order
-		e.mu.Unlock()
+		// 注意：不在这里更新缓存，避免 InitFromRestAPI 中的死锁
+		// InitFromRestAPI 会直接设置缓存数据
 	}
 
 	return orders, nil
@@ -238,16 +245,47 @@ func (e *LiveExecutor) GetOpenOrders(ctx context.Context, symbol string) ([]*cor
 
 // GetAccount 获取账户信息
 func (e *LiveExecutor) GetAccount(ctx context.Context) (*core.Account, error) {
+	// 如果 accountCache 为 nil，直接调用 API（向后兼容）
+	if e.accountCache == nil {
+		accountInfo, err := e.client.GetAccount(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return AccountInfoToAccount(accountInfo), nil
+	}
+
+	// 优先从账户缓存读取（UserDataStream实时更新）
+	balance := e.accountCache.GetBalance()
+	if balance > 0 {
+		// 从缓存构建账户信息
+		return &core.Account{
+			AvailableBalance: balance,
+			TotalBalance:     balance,
+			UpdateTime:       time.Now(),
+		}, nil
+	}
+
+	// 如果缓存为空，从API获取（通常在初始化时）
 	accountInfo, err := e.client.GetAccount(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return AccountInfoToAccount(accountInfo), nil
+	account := AccountInfoToAccount(accountInfo)
+	// 注意：不在这里更新缓存，避免 InitFromRestAPI 中的死锁
+	// InitFromRestAPI 会直接设置缓存数据
+	return account, nil
 }
 
 // GetPositions 获取持仓信息
 func (e *LiveExecutor) GetPositions(ctx context.Context) ([]*core.Position, error) {
+	// 优先从账户缓存读取（UserDataStream实时更新）
+	cachedPositions := e.accountCache.GetAllPositions()
+	if len(cachedPositions) > 0 {
+		return cachedPositions, nil
+	}
+
+	// 如果缓存为空，从API获取（通常在初始化时）
 	positions, err := e.client.GetPositionRisk(ctx, "")
 	if err != nil {
 		return nil, err
@@ -258,11 +296,7 @@ func (e *LiveExecutor) GetPositions(ctx context.Context) ([]*core.Position, erro
 		corePos := PositionRiskToPosition(pos)
 		if corePos != nil && corePos.Size > 0 { // 只返回有持仓的
 			result = append(result, corePos)
-
-			// 更新缓存
-			e.mu.Lock()
-			e.positionCache[corePos.Symbol] = corePos
-			e.mu.Unlock()
+			// 注意：不在这里更新缓存，避免 InitFromRestAPI 中的死锁
 		}
 	}
 
@@ -282,13 +316,8 @@ func (e *LiveExecutor) SetMarginMode(ctx context.Context, symbol string, mode co
 
 // Close 关闭执行器
 func (e *LiveExecutor) Close() error {
-	// 清空缓存
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.orderCache = make(map[string]*core.Order)
-	e.positionCache = make(map[string]*core.Position)
-
+	// 不再需要清理本地缓存
+	// AccountCache 由外部管理生命周期
 	return nil
 }
 
@@ -296,11 +325,8 @@ func (e *LiveExecutor) Close() error {
 
 // GetPosition 获取指定交易对的持仓
 func (e *LiveExecutor) GetPosition(ctx context.Context, symbol string) (*core.Position, error) {
-	// 先从缓存查询
-	e.mu.RLock()
-	pos, exists := e.positionCache[symbol]
-	e.mu.RUnlock()
-
+	// 先从账户缓存查询
+	pos, exists := e.accountCache.GetPosition(symbol)
 	if exists {
 		return pos, nil
 	}
@@ -314,10 +340,7 @@ func (e *LiveExecutor) GetPosition(ctx context.Context, symbol string) (*core.Po
 	for _, pos := range positions {
 		corePos := PositionRiskToPosition(pos)
 		if corePos != nil && corePos.Size > 0 {
-			// 更新缓存
-			e.mu.Lock()
-			e.positionCache[symbol] = corePos
-			e.mu.Unlock()
+			// 注意：不在这里更新缓存，避免死锁
 			return corePos, nil
 		}
 	}

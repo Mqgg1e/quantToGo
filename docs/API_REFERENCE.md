@@ -647,11 +647,23 @@ func (m *Manager) CheckTrailingStop(symbol string, currentPrice float64) (bool, 
 //   apiKey: string - Binance API Key
 //   secretKey: string - Binance Secret Key
 //   baseURL: string - API基础URL（主网或测试网）
+//   accountCache: *cache.AccountCache - 账户缓存实例
 // 返回:
 //   *LiveExecutor - 执行器实例
-func NewLiveExecutor(apiKey, secretKey, baseURL string) *LiveExecutor
+func NewLiveExecutor(apiKey, secretKey, baseURL string, accountCache *cache.AccountCache) *LiveExecutor
+
+// GetClient 获取币安客户端（用于UserDataStream）
+// 返回:
+//   *Client - 币安API客户端
+func (e *LiveExecutor) GetClient() *Client
+
+// SetAccountCache 设置账户缓存（用于后期注入）
+// 参数:
+//   cache: *cache.AccountCache - 账户缓存实例
+func (e *LiveExecutor) SetAccountCache(cache *cache.AccountCache)
 
 // PlaceOrder 下单（实现Executor接口）
+// 注意: 不再缓存订单，由UserDataStream实时更新AccountCache
 // 参数:
 //   ctx: context.Context - 上下文
 //   order: *core.Order - 订单详情
@@ -661,6 +673,7 @@ func NewLiveExecutor(apiKey, secretKey, baseURL string) *LiveExecutor
 func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core.Order, error)
 
 // GetAccount 获取账户信息（实现Executor接口）
+// 注意: 优先从AccountCache读取，避免频繁REST API调用
 // 参数:
 //   ctx: context.Context - 上下文
 // 返回:
@@ -669,6 +682,7 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 func (e *LiveExecutor) GetAccount(ctx context.Context) (*core.Account, error)
 
 // GetPositions 获取持仓（实现Executor接口）
+// 注意: 优先从AccountCache读取，UserDataStream实时更新
 // 参数:
 //   ctx: context.Context - 上下文
 // 返回:

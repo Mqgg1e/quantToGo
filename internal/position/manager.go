@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"goQuant/internal/cache"
 	"goQuant/internal/config"
 	"goQuant/internal/core"
 	"goQuant/internal/logger"
@@ -15,10 +16,11 @@ import (
 
 // Manager 仓位管理器
 type Manager struct {
-	config    *config.PositionConfig
-	executor  core.Executor
-	mu        sync.RWMutex
-	positions map[string]*PositionState // key: symbol
+	config       *config.PositionConfig
+	executor     core.Executor
+	accountCache *cache.AccountCache // 账户缓存（替代本地持仓缓存）
+	mu           sync.RWMutex
+	positions    map[string]*PositionState // key: symbol (仅存储策略特定状态)
 }
 
 // PositionState 持仓状态（扩展信息）
@@ -35,11 +37,12 @@ type PositionState struct {
 }
 
 // NewManager 创建仓位管理器
-func NewManager(cfg *config.PositionConfig, executor core.Executor) *Manager {
+func NewManager(cfg *config.PositionConfig, executor core.Executor, accountCache *cache.AccountCache) *Manager {
 	return &Manager{
-		config:    cfg,
-		executor:  executor,
-		positions: make(map[string]*PositionState),
+		config:       cfg,
+		executor:     executor,
+		accountCache: accountCache,
+		positions:    make(map[string]*PositionState),
 	}
 }
 
@@ -332,15 +335,14 @@ func (m *Manager) CalculatePositionSize(signal *core.TradingSignal, accountBalan
 
 // createOpenOrder 创建开仓订单
 func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float64) (*core.Order, error) {
-	// 获取账户余额
-	ctx := context.Background()
-	account, err := m.executor.GetAccount(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get account: %w", err)
+	// 从账户缓存获取余额（UserDataStream实时更新）
+	accountBalance := m.accountCache.GetBalance()
+	if accountBalance == 0 {
+		return nil, fmt.Errorf("account balance is zero or not initialized")
 	}
 
 	// 计算仓位大小
-	usdtAmount, err := m.CalculatePositionSize(signal, account.AvailableBalance)
+	usdtAmount, err := m.CalculatePositionSize(signal, accountBalance)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +362,7 @@ func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float
 	logger.Info("Creating order",
 		zap.String("symbol", signal.Symbol),
 		zap.String("signal_type", string(signal.Type)),
-		zap.Float64("account_balance", account.AvailableBalance),
+		zap.Float64("account_balance", accountBalance),
 		zap.Float64("usdt_amount", usdtAmount),
 		zap.Float64("current_price", currentPrice),
 		zap.Int("leverage", m.config.DefaultLeverage),

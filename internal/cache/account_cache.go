@@ -45,24 +45,33 @@ func NewAccountCache() *AccountCache {
 // InitFromRestAPI 从 REST API 全量同步账户信息
 // 在启动时或重连后调用，确保缓存与交易所同步
 func (c *AccountCache) InitFromRestAPI(ctx context.Context, executor Executor) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	logger.Info("Initializing account cache from REST API...")
 
-	// 1. 获取账户信息（余额）
+	// 1. 获取账户信息（余额）- 不持有锁时调用
 	account, err := executor.GetAccount(ctx)
 	if err != nil {
 		return fmt.Errorf("get account: %w", err)
 	}
-	c.balance = account.AvailableBalance
-	logger.Info("Account balance loaded", zap.Float64("balance", c.balance))
 
-	// 2. 获取所有持仓
+	// 2. 获取所有持仓 - 不持有锁时调用
 	positions, err := executor.GetPositions(ctx)
 	if err != nil {
 		return fmt.Errorf("get positions: %w", err)
 	}
+
+	// 3. 获取所有未成交订单 - 不持有锁时调用
+	orders, err := executor.GetOpenOrders(ctx, "")
+	if err != nil {
+		return fmt.Errorf("get open orders: %w", err)
+	}
+
+	// 现在持有锁并更新缓存
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 更新余额
+	c.balance = account.AvailableBalance
+	logger.Info("Account balance loaded", zap.Float64("balance", c.balance))
 
 	// 清空并重建持仓缓存
 	c.positions = make(map[string]*core.Position)
@@ -76,13 +85,6 @@ func (c *AccountCache) InitFromRestAPI(ctx context.Context, executor Executor) e
 				zap.Float64("entry_price", pos.EntryPrice),
 			)
 		}
-	}
-
-	// 3. 获取所有未成交订单
-	// 注意：需要遍历所有交易对（或传入空字符串获取全部）
-	orders, err := executor.GetOpenOrders(ctx, "")
-	if err != nil {
-		return fmt.Errorf("get open orders: %w", err)
 	}
 
 	// 清空并重建订单缓存
