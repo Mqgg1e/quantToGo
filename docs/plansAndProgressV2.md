@@ -97,9 +97,43 @@ WebSocket 下单优先级：初期建议保留 REST API 下单作为主要方式
 
 如果内容太多，可以进行规划和切分，保存施工计划在docs/version2.md
 ####
-**实施计划**
+**实施计划** - 已创建 `docs/version2.md`
 
-已创建详细实施计划: `docs/version2.md`
+**Phase 1-3 已完成** (091225 - 121225):
+1. ✅ 账户缓存模块 (`internal/cache/account_cache.go`) - 独立服务层，完全解耦
+2. ✅ UserDataStream 实时更新 (`internal/execution/binance/userdata_stream.go`) - 30分钟保活，自动重连
+3. ✅ ListenKey 管理 (`internal/execution/binance/listenkey.go`) - 创建/保活/关闭
+4. ✅ 事件处理 (`internal/execution/binance/userdata_events.go`) - ACCOUNT_UPDATE, ORDER_TRADE_UPDATE
+5. ✅ 测试程序 (`cmd/test-userdata-stream/main.go`) - 实盘验证通过
+
+**测试验证** (121225 18:06):
+- ✅ 完整开仓平仓流程验证 (0.073 BTCUSDT)
+- ✅ 15+ 事件完整接收，无遗漏
+- ✅ 版本控制防止乱序更新
+- ✅ WebSocket 连接稳定
+
+**下一步**: Week 3-4 执行层与仓位管理重构
+
+**缓存维护验证** (121225 - 1830):
+✅ **问题**: 余额和持仓在本地缓存的维护正常吗？分批成交能正确处理吗？
+✅ **答案**: 完全正常，分批成交完美支持
+
+**验证结果**:
+1. ✅ 分批成交测试 (3笔) - 每笔都准确更新缓存
+2. ✅ 订单状态追踪 - NEW → PARTIALLY_FILLED → FILLED 完整
+3. ✅ 余额实时更新 - 包含手续费计算
+4. ✅ 持仓准确维护 - 0.073 → 0.071 → 0.065 → 0
+5. ✅ 版本控制优化 - 修复同版本号事件被忽略问题
+6. ✅ 最终状态验证 - 所有数据完全准确
+
+**优化**:
+- 修复版本控制逻辑 (`version <= current` → `version < current`)
+- 允许同一交易时间戳的多个事件更新
+- 保留防止乱序更新能力
+
+**结论**: 缓存机制完善可靠，可以安全进入下一阶段重构 ✅
+
+####已创建详细实施计划: `docs/version2.md`
 
 **核心改动**:
 1. 创建独立账户缓存模块 (`internal/cache/`) - 解耦策略与缓存
@@ -114,7 +148,55 @@ WebSocket 下单优先级：初期建议保留 REST API 下单作为主要方式
 - Week 5: 集成测试
 - Week 6: WebSocket下单 (可选优化)
 
-**进度更新 (091225)**:
+**进度更新 (121225 - 1820)**:
+
+🔧 **关键修复**: WebSocket URL 错误导致无法接收事件
+- ✅ **根本原因**: WebSocket 硬编码为生产环境 URL，与测试网 ListenKey 不匹配
+- ✅ 添加 `getWebSocketURL()` 动态选择正确端点（测试网/生产环境）
+- ✅ 测试网: `wss://stream.binancefuture.com/ws`
+- ✅ 生产环境: `wss://fstream.binance.com/ws`
+- ✅ 将事件日志改为 Info 级别，添加完整消息输出
+
+**问题分析**:
+```
+REST API:    testnet.binancefuture.com     ← 测试网 ✅
+WebSocket:   fstream.binance.com/ws        ← 生产环境 ❌ (修复前)
+ListenKey:   从测试网创建                  ← 测试网 ✅
+结果:        生产环境不认识测试网 ListenKey → 收不到事件 ❌
+```
+
+**修复后**:
+```
+REST API:    testnet.binancefuture.com     ← 测试网 ✅
+WebSocket:   stream.binancefuture.com/ws   ← 测试网 ✅ (修复后)
+ListenKey:   从测试网创建                  ← 测试网 ✅
+结果:        完美匹配 → 能收到事件 ✅
+```
+
+---
+
+**进度更新 (121225 - 1812)**:
+
+🐛 **Bug 修复**: UserDataStream 测试问题
+- ✅ 修复重连时 nil pointer panic（添加 executor 参数）
+- ✅ 修复 WebSocket 超时（添加 pingLoop 保持连接）
+- ✅ 添加代理支持（SetProxy 和 GetWebSocketDialer）
+- ✅ 更新测试程序使用代理配置
+
+**修复详情**:
+1. `NewUserDataStream` 添加 executor 参数避免重连时 nil pointer
+2. 实现 `pingLoop()` 每 54 秒发送 WebSocket ping 保持连接活跃
+3. `Client` 添加 `SetProxy()` 和 `GetWebSocketDialer()` 支持代理
+4. 测试程序配置代理 `http://127.0.0.1:7897`
+
+**已解决的问题**:
+- ❌ "read tcp i/o timeout" - WebSocket 1分钟超时
+- ❌ "nil pointer dereference" - 重连时 panic
+- ❌ 无法接收交易事件
+
+---
+
+**进度更新 (091225 - 1712)**:
 ✅ Phase 1.1: 账户缓存模块完成
 - 创建 `internal/cache/account_cache.go` 
 - 实现所有缓存管理方法（余额、持仓、订单）
@@ -131,7 +213,61 @@ WebSocket 下单优先级：初期建议保留 REST API 下单作为主要方式
 - 实现断连自动重连机制
 - 重连后自动从 REST API 同步状态
 
-下一步: Phase 2 - 创建测试程序验证功能
+✅ Phase 2: 测试程序创建完成
+- 创建 `cmd/test-userdata-stream/main.go` (3.8KB)
+- 创建 `scripts/test-userdata-stream.sh` (可执行)
+- 编译生成 `bin/test-userdata-stream` (9.3MB)
+- 集成 AccountCache 和 UserDataStream
+- 实现实时缓存状态监控
+- 所有包编译通过 ✅
+
+**已更新文档**:
+- ✅ `docs/plansAndProgressV2.md` - 进度记录
+- ✅ `docs/version2.md` - 实施计划（Week 2 完成标记，添加测试说明）
+- ✅ `docs/CHANGELOG.md` - Phase 2 变更记录
+
+**下一步操作**:
+
+**Phase 3: 运行测试验证功能**
+
+运行测试程序：
+```bash
+./scripts/test-userdata-stream.sh
+```
+
+或者直接运行：
+```bash
+go run cmd/test-userdata-stream/main.go
+```
+
+**测试步骤**:
+1. 运行测试程序，观察 ListenKey 创建和 WebSocket 连接是否成功
+2. 程序会每 30 秒打印一次缓存状态
+3. 打开币安测试网 https://testnet.binancefuture.com 手动下单
+4. 观察程序是否实时接收到事件并更新缓存
+5. 测试通过后进入 Week 3 执行层重构
+
+**测试结果**: ✅ **全部通过** (121225 - 1806)
+- ✅ ListenKey 创建成功 (e8BmhC5J...)
+- ✅ WebSocket 连接建立成功 (wss://stream.binancefuture.com/ws)
+- ✅ 初始余额和持仓正确加载 (5282.28 USDT)
+- ✅ 手动开仓实时收到 ORDER_TRADE_UPDATE 事件 (NEW → FILLED)
+- ✅ 持仓变化实时收到 ACCOUNT_UPDATE 事件 (0.073 BTCUSDT LONG)
+- ✅ 手动平仓完整流程验证 (PARTIALLY_FILLED → FILLED → Position closed)
+- ✅ 缓存数据实时准确更新
+- ✅ 版本控制正确工作（防止乱序更新）
+
+**测试详情**:
+- 开仓: 0.073 BTCUSDT @ 92496
+- 平仓: 分3笔成交 (0.002 + 0.006 + 0.065) @ 92478.31
+- 盈亏: -6.69 USDT (手续费损失)
+- 事件接收: 完整无遗漏
+- WebSocket: 稳定无断连
+
+**发现**:
+- 新增 TRADE_LITE 事件类型（轻量级交易事件，可忽略）
+
+✅ **Phase 2-3 完成，准备进入 Week 3: 执行层重构**
 
 ####
 

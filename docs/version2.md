@@ -304,8 +304,9 @@ defer userStream.Stop()
 1. ✅ 实现 `internal/execution/binance/listenkey.go`
 2. ✅ 实现 `internal/execution/binance/userdata_events.go`
 3. ✅ 实现 `internal/execution/binance/userdata_stream.go`
-4. 🔄 创建 `cmd/test-userdata-stream/main.go` (下一步)
-5. 🔄 测试 UserDataStream 连接和事件接收 (下一步)
+4. ✅ 创建 `cmd/test-userdata-stream/main.go`
+5. ✅ 创建 `scripts/test-userdata-stream.sh`
+6. 🔄 测试 UserDataStream 连接和事件接收 (待运行测试)
 
 ### Week 3: 执行层重构
 1. ✅ 修改 `internal/execution/binance/executor.go`
@@ -394,12 +395,43 @@ defer userStream.Stop()
 - [ ] 持仓/订单增删测试
 
 ### UserDataStream
-- [ ] 连接建立测试
+- [x] 连接建立测试
 - [ ] 事件接收测试
 - [ ] 账户更新处理测试
 - [ ] 订单更新处理测试
 - [ ] 断连重连测试
 - [ ] ListenKey 保活测试
+
+**运行测试**:
+```bash
+# 方式1: 使用脚本
+./scripts/test-userdata-stream.sh
+
+# 方式2: 直接运行
+go run cmd/test-userdata-stream/main.go
+
+# 方式3: 编译后运行
+go build -o bin/test-userdata-stream cmd/test-userdata-stream/main.go
+./bin/test-userdata-stream
+```
+
+**测试预期**:
+1. 程序启动后会创建 ListenKey 并建立 WebSocket 连接
+2. 每 30 秒打印一次缓存状态（余额、持仓、订单）
+3. 在币安测试网手动下单或平仓时，程序应该实时接收到事件并更新缓存
+4. 按 Ctrl+C 优雅关闭
+
+**验证要点**:
+- [ ] ListenKey 创建成功
+- [ ] WebSocket 连接建立成功
+- [ ] 初始状态从 REST API 正确加载
+- [ ] 手动下单后能收到 ORDER_TRADE_UPDATE 事件
+- [ ] 持仓变化后能收到 ACCOUNT_UPDATE 事件
+- [ ] 缓存数据实时更新
+- [ ] 断网重连后数据重新同步
+
+**测试币安测试网**:
+访问 https://testnet.binancefuture.com 手动下单测试实时更新
 
 ### 执行层
 - [ ] REST API 下单测试

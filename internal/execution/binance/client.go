@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Client 币安期货API客户端
@@ -19,6 +21,7 @@ type Client struct {
 	apiKey     string
 	secretKey  string
 	baseURL    string
+	proxyURL   string
 	httpClient *http.Client
 }
 
@@ -32,10 +35,43 @@ func NewClient(apiKey, secretKey, baseURL string) *Client {
 		apiKey:    apiKey,
 		secretKey: secretKey,
 		baseURL:   baseURL,
+		proxyURL:  "",
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// SetProxy 设置代理
+func (c *Client) SetProxy(proxyURL string) error {
+	c.proxyURL = proxyURL
+	if proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err != nil {
+			return fmt.Errorf("parse proxy URL: %w", err)
+		}
+		c.httpClient.Transport = &http.Transport{
+			Proxy: http.ProxyURL(proxy),
+		}
+	}
+	return nil
+}
+
+// GetWebSocketDialer 获取 WebSocket Dialer（带代理配置）
+func (c *Client) GetWebSocketDialer() *websocket.Dialer {
+	dialer := websocket.DefaultDialer
+
+	if c.proxyURL != "" {
+		proxyURL, err := url.Parse(c.proxyURL)
+		if err == nil {
+			dialer = &websocket.Dialer{
+				Proxy:            http.ProxyURL(proxyURL),
+				HandshakeTimeout: 45 * time.Second,
+			}
+		}
+	}
+
+	return dialer
 }
 
 // ========== 签名与请求方法 ==========

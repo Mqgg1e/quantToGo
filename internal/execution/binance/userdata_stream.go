@@ -21,6 +21,7 @@ type UserDataStream struct {
 	client         *Client
 	accountCache   *cache.AccountCache
 	executor       cache.Executor // 用于从REST API同步状态
+	wsBaseURL      string         // WebSocket 端点URL
 	mu             sync.RWMutex
 	listenKey      string
 	conn           *websocket.Conn
@@ -31,9 +32,6 @@ type UserDataStream struct {
 }
 
 const (
-	// WebSocket endpoint
-	wsBaseURL = "wss://fstream.binance.com/ws"
-
 	// KeepAlive interval (30 minutes, ListenKey expires in 60 minutes)
 	keepAliveInterval = 30 * time.Minute
 
@@ -48,11 +46,23 @@ const (
 	writeWait  = 10 * time.Second
 )
 
+// getWebSocketURL 根据 REST API baseURL 获取对应的 WebSocket URL
+func getWebSocketURL(baseURL string) string {
+	// 测试网
+	if baseURL == "https://testnet.binancefuture.com" {
+		return "wss://stream.binancefuture.com/ws"
+	}
+	// 生产环境
+	return "wss://fstream.binance.com/ws"
+}
+
 // NewUserDataStream 创建 UserDataStream 实例
-func NewUserDataStream(client *Client, accountCache *cache.AccountCache) *UserDataStream {
+func NewUserDataStream(client *Client, accountCache *cache.AccountCache, executor cache.Executor) *UserDataStream {
 	return &UserDataStream{
 		client:         client,
 		accountCache:   accountCache,
+		executor:       executor,
+		wsBaseURL:      getWebSocketURL(client.baseURL),
 		stopCh:         make(chan struct{}),
 		reconnectDelay: initialReconnectDelay,
 		maxReconnect:   maxReconnectAttempts,
@@ -98,7 +108,10 @@ func (s *UserDataStream) Start(ctx context.Context) error {
 	// 3. 启动 ListenKey 保活协程
 	go s.keepAliveLoop(ctx)
 
-	// 4. 启动消息读取协程
+	// 4. 启动 ping 循环（保持 WebSocket 连接）
+	go s.pingLoop(ctx)
+
+	// 5. 启动消息读取协程
 	go s.readLoop(ctx)
 
 	logger.Info("UserDataStream started successfully")
@@ -151,13 +164,20 @@ func (s *UserDataStream) Stop() {
 func (s *UserDataStream) connect() error {
 	s.mu.RLock()
 	listenKey := s.listenKey
+	wsBaseURL := s.wsBaseURL
 	s.mu.RUnlock()
 
 	wsURL := fmt.Sprintf("%s/%s", wsBaseURL, listenKey)
 
-	logger.Info("Connecting to UserDataStream WebSocket", zap.String("url", wsBaseURL+"/..."))
+	logger.Info("Connecting to UserDataStream WebSocket",
+		zap.String("url", wsBaseURL+"/..."),
+		zap.String("listen_key", listenKey[:8]+"..."),
+	)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	// 使用客户端的代理配置
+	dialer := s.client.GetWebSocketDialer()
+
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial websocket: %w", err)
 	}
@@ -240,9 +260,10 @@ func (s *UserDataStream) handleMessage(message []byte) error {
 		return fmt.Errorf("unmarshal base event: %w", err)
 	}
 
-	logger.Debug("Received UserDataStream event",
+	logger.Info("Received UserDataStream event",
 		zap.String("event_type", baseEvent.EventType),
 		zap.Int64("event_time", baseEvent.EventTime),
+		zap.String("raw_message", string(message)),
 	)
 
 	// 根据事件类型分发处理
@@ -543,6 +564,44 @@ func (s *UserDataStream) keepAliveLoop(ctx context.Context) {
 				go s.reconnect(ctx)
 			} else {
 				logger.Debug("ListenKey kept alive successfully")
+			}
+		}
+	}
+}
+
+// pingLoop WebSocket ping 循环（保持连接活跃）
+func (s *UserDataStream) pingLoop(ctx context.Context) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopCh:
+			logger.Info("Ping loop stopped")
+			return
+		case <-ctx.Done():
+			logger.Info("Ping loop cancelled")
+			return
+		case <-ticker.C:
+			s.mu.RLock()
+			conn := s.conn
+			s.mu.RUnlock()
+
+			if conn == nil {
+				continue
+			}
+
+			if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				logger.Error("Failed to set write deadline", zap.Error(err))
+				continue
+			}
+
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				logger.Error("Failed to send ping", zap.Error(err))
+				// Ping 失败，可能需要重连
+				go s.reconnect(ctx)
+			} else {
+				logger.Debug("WebSocket ping sent")
 			}
 		}
 	}

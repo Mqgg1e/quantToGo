@@ -125,8 +125,9 @@ func (c *AccountCache) UpdateBalance(balance float64, version int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 版本检查：忽略旧版本的更新
-	if version <= c.updateVersion {
+	// 版本检查：只忽略明显过时的更新（严格小于）
+	// 允许同一版本号的多个更新（币安同一交易可能推送多个事件）
+	if version < c.updateVersion {
 		logger.Debug("Ignoring outdated balance update",
 			zap.Int64("current_version", c.updateVersion),
 			zap.Int64("update_version", version),
@@ -181,8 +182,8 @@ func (c *AccountCache) UpdatePosition(position *core.Position, version int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 版本检查
-	if version <= c.updateVersion {
+	// 版本检查：只忽略明显过时的更新（严格小于）
+	if version < c.updateVersion {
 		logger.Debug("Ignoring outdated position update",
 			zap.String("symbol", position.Symbol),
 			zap.Int64("current_version", c.updateVersion),
@@ -280,8 +281,8 @@ func (c *AccountCache) UpdateOrder(order *core.Order, version int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 版本检查
-	if version <= c.updateVersion {
+	// 版本检查：只忽略明显过时的更新（严格小于）
+	if version < c.updateVersion {
 		logger.Debug("Ignoring outdated order update",
 			zap.String("order_id", order.ID),
 			zap.Int64("current_version", c.updateVersion),

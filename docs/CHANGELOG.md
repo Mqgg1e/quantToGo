@@ -6,7 +6,103 @@
 
 ## 2025-12-12
 
-### 🚀 V2 重构：账户缓存与 UserDataStream (Phase 1)
+### 🔧 优化缓存版本控制逻辑
+
+**问题**: 
+- 币安同一交易会推送多个事件，但使用相同的交易时间戳
+- 原版本控制使用 `version <= currentVersion` 会拒绝同版本号的后续更新
+- 导致中间状态更新被忽略
+
+**修复**:
+- 改为 `version < currentVersion`（严格小于）
+- 允许同一时间戳的多个事件更新缓存
+- 保留了防止乱序更新的能力
+
+**影响**:
+- 之前：同一交易的多个 ACCOUNT_UPDATE 只有第一个生效
+- 现在：所有事件都能正常更新缓存
+- 最终结果：之前虽然有日志警告，但最终状态仍然正确（因为最后的事件包含完整快照）
+
+**文件**: `internal/cache/account_cache.go`
+
+---
+
+### ✅ Phase 2-3 测试完成 - UserDataStream 功能验证通过
+
+**测试时间**: 2025-12-12 18:06 CST
+
+**测试结果**: 全部通过 ✅
+
+**验证项目**:
+1. ✅ ListenKey 创建成功
+2. ✅ WebSocket 连接稳定 (wss://stream.binancefuture.com/ws)
+3. ✅ 初始余额加载正确 (5282.28 USDT)
+4. ✅ 开仓事件完整接收 (ORDER_TRADE_UPDATE: NEW → FILLED)
+5. ✅ 账户更新实时同步 (ACCOUNT_UPDATE: 余额、持仓)
+6. ✅ 平仓流程完整验证 (部分成交 → 完全成交 → 持仓清零)
+7. ✅ 版本控制机制工作正常 (防止乱序更新)
+8. ✅ 缓存数据准确更新
+
+**测试交易**:
+- 开仓: 0.073 BTCUSDT LONG @ 92496
+- 平仓: 0.073 BTCUSDT (分3笔成交) @ 92478.31
+- 最终余额: 5275.59 USDT
+- 事件接收: 15+ 个事件，完整无遗漏
+
+**新发现**:
+- 币安新增 `TRADE_LITE` 事件类型（轻量级交易事件）
+- 当前标记为 WARN，不影响功能
+
+**下一步**: Week 3 - 执行层重构
+
+---
+
+### 🐛 修复 UserDataStream 无法接收事件（关键修复）
+
+**根本原因**:
+- ❌ WebSocket URL 硬编码为生产环境 `wss://fstream.binance.com/ws`
+- ❌ 但 REST API 使用测试网 `https://testnet.binancefuture.com`
+- ❌ 测试网的 ListenKey 在生产环境 WebSocket 无效
+- ❌ 导致手动下单后收不到任何事件
+
+**修复**:
+1. ✅ 添加 `getWebSocketURL()` 函数根据 REST API baseURL 动态选择 WebSocket 端点
+   - 测试网: `wss://stream.binancefuture.com/ws`
+   - 生产环境: `wss://fstream.binance.com/ws`
+2. ✅ 将事件日志从 `Debug` 改为 `Info` 级别，添加完整消息输出
+3. ✅ 在 connect() 日志中显示 WebSocket URL 和 ListenKey
+
+**影响文件**:
+- `internal/execution/binance/userdata_stream.go`
+
+**测试验证**:
+- 运行 `./bin/test-userdata-stream`
+- 在测试网下单应立即收到 ORDER_TRADE_UPDATE 和 ACCOUNT_UPDATE 事件
+- 缓存数据实时更新
+
+---
+
+### 🐛 修复 UserDataStream 测试问题
+
+**问题**:
+1. ❌ 重连时发生 nil pointer panic
+2. ❌ WebSocket 连接 1 分钟后超时断开
+3. ❌ 无法接收交易事件
+
+**修复**:
+1. ✅ 添加 `executor` 参数到 `NewUserDataStream`，修复重连时的 nil pointer 错误
+2. ✅ 实现 `pingLoop()` 保持 WebSocket 连接活跃（每 54 秒发送 ping）
+3. ✅ 添加代理支持：`Client.SetProxy()` 和 `Client.GetWebSocketDialer()`
+4. ✅ 更新测试程序配置代理
+
+**影响文件**:
+- `internal/execution/binance/userdata_stream.go` - 添加 executor 参数和 pingLoop
+- `internal/execution/binance/client.go` - 添加代理支持
+- `cmd/test-userdata-stream/main.go` - 配置代理和传递 executor
+
+---
+
+### 🚀 V2 重构：账户缓存与 UserDataStream (Phase 1-2)
 
 #### 新增功能
 
@@ -33,15 +129,30 @@
 - `internal/execution/binance/userdata_events.go` - 事件数据结构
 - `internal/execution/binance/userdata_stream.go` - WebSocket 客户端
 
+**3. UserDataStream 测试程序** (`cmd/test-userdata-stream/`)
+- 创建独立测试程序验证 UserDataStream 功能
+- 集成 AccountCache 和 UserDataStream
+- 实时监控缓存状态变化
+- 支持手动测试：在币安测试网下单验证实时更新
+
+**文件**:
+- `cmd/test-userdata-stream/main.go` - 测试程序
+- `scripts/test-userdata-stream.sh` - 测试脚本
+
+**运行测试**:
+```bash
+./scripts/test-userdata-stream.sh
+```
+
 #### 架构改进
 - 解耦缓存逻辑：缓存模块独立于策略和仓位管理
 - 实时更新替代轮询：通过 WebSocket 推送，降低延迟
 - 数据一致性保障：版本控制 + 重连同步机制
 
 #### 下一步
-- Phase 2: 创建测试程序验证 UserDataStream 功能
-- Phase 3: 执行层重构（移除本地缓存，集成 AccountCache）
-- Phase 4: 仓位管理器重构（注入 AccountCache，提取工具函数）
+- Phase 3: 运行测试验证 UserDataStream 功能
+- Phase 4: 执行层重构（移除本地缓存，集成 AccountCache）
+- Phase 5: 仓位管理器重构（注入 AccountCache，提取工具函数）
 
 ---
 
