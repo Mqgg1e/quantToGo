@@ -3,8 +3,139 @@
 ## ! 完成后不可以再创建md文件
 ## ! 之前的进度参考docs/plansAndProgressV1.md
 
+## ! 像是manager.go和macd_ema_strategy.go这样的文件每换策略就要更换，尽量避免常用函数写在这里面
+
+
 
 ### 091225
+
+#### 1149 
+1.我需要较大规模修改整个框架，主要是仓位管理和执行这两部分
++ 在本地维护一个账户信息(余额等)，当前持仓，当前订单的缓存，用来替代当前的缓存机制
+  + 使用listenkey快照来更新当前仓位和订单变化：参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/user-data-streams，有变化就会推送
+    + 需要listenkey的断连检测和保活（60分钟关闭，需要保活）或更新
+  + 启动或断连重启时需要调用rest api重新获取当前挂单和账户信息和持仓，覆盖缓存
+    + 查询当前挂单参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/trade/rest-api/Query-Current-Open-Order，
+    + 账户信息参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/account/rest-api/Account-Information-V3
++ 更改下单逻辑，规定好可以通过api下单的种类，让订单更加原子化并且可组合
+  + 让仓位管理决定最后输出给执行层的订单种类和次序，实现策略逻辑
+  + 执行层与交易所建立ws连接，通过ws来下单
+    + ws都需要断连检测和保活（24h）
+ws下单参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/trade/websocket-api
+
+
+2.目前存在一些问题
++ 策略和仓位管理模块是由交易策略决定的，如果更换交易策略就会同时更换这两个模块，那么本地缓存模块应该放在哪里才不会导致更换交易策略重复代码
+3.我想让策略和仓位管理和其他模块完全切割，我的意思是我每更换策略也就是像是manager.go和macd_ema_strategy.go这两个文件时我只需要写这两个文件就行，因为这两个文件可能会频繁更换，所以我想写的时候尽量少改变外部结构
++ manager下单的时候按顺序调用下单指令，完成复杂下单组合
++ executor
+
+下单指令：
+1.市价单（入场），使用order.place，调用时传入symbol side quantity，其他必要但重复参数内嵌
+2.限价单（入场），使用order.place，调用时传入symbol side quantity timestamp price/priceMatch timeInForce，其他必要但重复参数内嵌
+3.市价单（”手动“出场，市价平掉某币种全部仓位）
+4.止损单（STOP_MARKET，到触发价市价平掉某币种全部仓位），使用algoOrder.place，调用时传入algoType triggerPrice symbol side，其他必要但重复参数内嵌（closePosition）
+5.跟踪止损单（TRAILING_STOP_MARKET，平掉全部仓位），使用algoOrder.place，调入时传入algoType symbol side activatePrice quantity callbackRate
++ 虽然都是使用ws，但是LIMIT，MARKET是使用order的，STOP TAKE_PROFIT STOP_MARKET TAKE_PROFIT_MARKET TRAILING_STOP_MARKET是用algoOrder的
++ order文档参数参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/trade/websocket-api
++ algoOrder文档参数参考https://developers.binance.com/docs/zh-CN/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
+
+
+claude suggestion:
+
+Plan: 重构账户缓存机制与执行层架构
+根据你的需求进行框架重构，主要涉及创建独立的账户缓存模块、实现 UserDataStream 实时更新机制、重构订单执行为 WebSocket 模式，并彻底解耦策略与仓位管理模块。
+步骤
+创建独立账户缓存模块 [internal/cache/account_cache.go]
+维护账户余额、当前持仓(map[string]*Position)、当前挂单(map[string]*Order)的内存缓存
+提供 InitFromRestAPI(ctx) 方法，启动/断连时通过 REST API 获取全量数据填充缓存
+提供线程安全的读写方法：GetBalance(), GetPosition(symbol), GetAllPositions(), GetOrder(id), GetOpenOrders(symbol), UpdatePosition(), UpdateOrder(), DeletePosition(), DeleteOrder()
+作为 internal/cache 包的独立服务，不依赖于 position 或 strategy 包
+实现 UserDataStream WebSocket 客户端 [internal/execution/binance/userdata_stream.go]
+实现 CreateListenKey(), KeepAliveListenKey(), CloseListenKey() REST API 调用（60分钟过期机制）
+建立 WebSocket 连接到 wss://fstream.binance.com/ws/{listenKey}
+监听 ACCOUNT_UPDATE 事件（余额、持仓变化）和 ORDER_TRADE_UPDATE 事件（订单状态变化）
+实现 24 小时连接保活和断连自动重连机制
+事件接收后调用 account_cache 的更新方法实时同步缓存
+重构执行层订单接口 [internal/execution/binance/ws_order.go, executor.go]
+新建 ws_order.go 实现 WebSocket 订单接口（连接到 wss://fstream.binance.com/ws-fapi/v1）
+定义5种原子订单方法：
+PlaceMarketOrder(symbol, side, quantity) - 市价单开仓
+PlaceLimitOrder(symbol, side, quantity, price, timeInForce) - 限价单开仓
+ClosePositionMarket(symbol, side) - 市价平仓全部仓位
+PlaceStopLossOrder(symbol, side, triggerPrice) - 止损单（STOP_MARKET，closePosition=true）
+PlaceTrailingStopOrder(symbol, side, activatePrice, callbackRate) - 跟踪止损单
+保留现有 executor.go 中的 REST API 方法作为备用
+订单响应通过 UserDataStream 更新缓存，不再直接更新 orderCache
+移除执行层本地缓存，改用账户缓存模块 [executor.go]
+删除 LiveExecutor 的 orderCache 和 positionCache 字段
+注入 accountCache *cache.AccountCache 依赖
+GetAccount(), GetPositions(), GetOrder() 等方法改为从账户缓存读取
+PlaceOrder() 成功后不再缓存，等待 UserDataStream 事件更新
+重构仓位管理器解耦缓存逻辑 [internal/position/manager.go]
+删除 Manager.positions 本地缓存
+注入 accountCache *cache.AccountCache 依赖
+ProcessSignal() 中调用 accountCache.GetPosition(symbol) 获取持仓信息
+ProcessSignal() 不再调用 executor.GetAccount() 获取余额，改为 accountCache.GetBalance()
+UpdatePosition() 方法标记为废弃或改为订阅缓存更新事件
+保留策略特定逻辑（止损计算、加仓限制、风险控制）在 manager.go 中
+将可复用的辅助函数（如 CalculatePositionSize, CheckRisk）提取到独立工具模块 [internal/position/utils.go]
+更新主程序启动流程 [cmd/live-trading/main.go]
+初始化账户缓存模块：accountCache := cache.NewAccountCache()
+通过 REST API 初始化缓存数据：accountCache.InitFromRestAPI(ctx, executor)
+启动 UserDataStream：userStream := binance.NewUserDataStream(client, accountCache); userStream.Start(ctx)
+将账户缓存注入执行器和仓位管理器：executor.SetAccountCache(accountCache), posMgr.SetAccountCache(accountCache)
+优雅关闭时停止 UserDataStream：defer userStream.Stop()
+Further Considerations
+账户缓存模块放置位置：建议放在 internal/cache/ 包作为独立服务层。更换策略（strategy/macd_ema_strategy.go 和 position/manager.go）时，cache 包完全不受影响，实现彻底解耦。
+WebSocket 下单优先级：初期建议保留 REST API 下单作为主要方式，先实现 UserDataStream 缓存更新机制验证稳定性。WebSocket 下单（ws_order.go）可作为后续性能优化，通过配置开关 execution.use_ws_order 控制。
+策略与仓位管理解耦：manager.go 中的止损策略（固定止损 0.6%、跟踪止盈三级）是策略特定的，建议将这些逻辑提取为接口 StopLossStrategy，在 manager.go 中注入不同实现。这样更换策略时只需实现新的 StopLossStrategy 而不修改 manager.go 核心流程。
+数据一致性保障：UserDataStream 断连期间可能丢失事件，重连后必须调用 REST API 重新全量同步（accountCache.InitFromRestAPI()）。建议在缓存更新时记录版本号或时间戳，检测并忽略乱序或过期的更新。
+测试策略：创建独立测试程序 [cmd/test-userdata-stream/main.go] 验证 UserDataStream 连接、事件接收、缓存同步的正确性，以及断连重连和 listenKey 保活机制，避免在实盘环境调试。
+
+部分手动下单传回的listenkey信息可参考listenkeyList.md，如果不能直接阅读网站，网站内容和部分与币安客服对话在orderLists.md
+
+如果内容太多，可以进行规划和切分，保存施工计划在docs/version2.md
+####
+**实施计划**
+
+已创建详细实施计划: `docs/version2.md`
+
+**核心改动**:
+1. 创建独立账户缓存模块 (`internal/cache/`) - 解耦策略与缓存
+2. 实现 UserDataStream 实时更新 - 替代轮询机制
+3. WebSocket 下单接口 (可选) - 性能优化
+4. 执行层移除本地缓存 - 统一使用 AccountCache
+5. 仓位管理器解耦 - 提取工具函数到 `utils.go`
+
+**分阶段实施** (6周):
+- Week 1-2: 账户缓存 + UserDataStream (核心)
+- Week 3-4: 执行层 + 仓位管理重构
+- Week 5: 集成测试
+- Week 6: WebSocket下单 (可选优化)
+
+**进度更新 (091225)**:
+✅ Phase 1.1: 账户缓存模块完成
+- 创建 `internal/cache/account_cache.go` 
+- 实现所有缓存管理方法（余额、持仓、订单）
+- 版本控制防止乱序更新
+- 线程安全的并发读写
+- 完整单元测试覆盖（100%通过）
+
+✅ Phase 1.2: UserDataStream 实现完成
+- 创建 `internal/execution/binance/listenkey.go` (ListenKey管理)
+- 创建 `internal/execution/binance/userdata_events.go` (事件数据结构)
+- 创建 `internal/execution/binance/userdata_stream.go` (主客户端)
+- 实现 ACCOUNT_UPDATE 和 ORDER_TRADE_UPDATE 事件处理
+- 实现 ListenKey 保活机制（30分钟）
+- 实现断连自动重连机制
+- 重连后自动从 REST API 同步状态
+
+下一步: Phase 2 - 创建测试程序验证功能
+
+####
+
+
 
 #### 0807
 目前架构细节（execution和manager部分）

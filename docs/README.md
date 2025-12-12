@@ -35,10 +35,16 @@
 
 ### 修改记录
 - **[CHANGELOG.md](CHANGELOG.md)** - 所有重要修改记录
+  - 2025-12-12: V2 重构 - 账户缓存与 UserDataStream
   - 2025-12-06: 仓位管理完善
   - 2025-12-05: 订单数量修复
   - 2025-12-05: API签名修复
   - 2025-12-05: 策略逻辑修复
+
+### 项目规划
+- **[plansAndProgressV1.md](plansAndProgressV1.md)** - V1 版本规划和进度
+- **[plansAndProgressV2.md](plansAndProgressV2.md)** - V2 重构规划和进度
+- **[version2.md](version2.md)** - V2 详细实施计划
 
 ---
 

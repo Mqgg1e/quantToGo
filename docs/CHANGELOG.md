@@ -4,6 +4,47 @@
 
 ---
 
+## 2025-12-12
+
+### 🚀 V2 重构：账户缓存与 UserDataStream (Phase 1)
+
+#### 新增功能
+
+**1. 账户缓存模块** (`internal/cache/`)
+- 创建独立的 `AccountCache` 模块，维护账户状态的内存缓存
+- 支持余额、持仓、订单的线程安全读写
+- 实现版本控制机制，防止乱序更新
+- 提供 `InitFromRestAPI()` 从 REST API 全量同步账户状态
+- 完整单元测试覆盖（100%通过）
+
+**文件**:
+- `internal/cache/account_cache.go` - 缓存实现
+- `internal/cache/account_cache_test.go` - 单元测试
+
+**2. UserDataStream 实时更新** (`internal/execution/binance/`)
+- 实现 Binance UserDataStream WebSocket 客户端
+- 自动接收 `ACCOUNT_UPDATE` 和 `ORDER_TRADE_UPDATE` 事件
+- ListenKey 管理：创建、保活（30分钟）、关闭
+- 断连自动重连机制，重连后从 REST API 同步状态
+- 事件处理并实时更新 AccountCache
+
+**文件**:
+- `internal/execution/binance/listenkey.go` - ListenKey 管理
+- `internal/execution/binance/userdata_events.go` - 事件数据结构
+- `internal/execution/binance/userdata_stream.go` - WebSocket 客户端
+
+#### 架构改进
+- 解耦缓存逻辑：缓存模块独立于策略和仓位管理
+- 实时更新替代轮询：通过 WebSocket 推送，降低延迟
+- 数据一致性保障：版本控制 + 重连同步机制
+
+#### 下一步
+- Phase 2: 创建测试程序验证 UserDataStream 功能
+- Phase 3: 执行层重构（移除本地缓存，集成 AccountCache）
+- Phase 4: 仓位管理器重构（注入 AccountCache，提取工具函数）
+
+---
+
 ## 2025-12-06
 
 ### ✅ 修复反向平仓时旧止损单未取消（Issue #1145）
