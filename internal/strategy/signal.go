@@ -26,13 +26,13 @@ type TradingSignal = core.TradingSignal
 // NewSignal 创建交易信号的辅助函数
 func NewSignal(signalType SignalType, symbol string, price float64, reason string) *TradingSignal {
 	return &TradingSignal{
-		Type:       signalType,
-		Symbol:     symbol,
-		Timestamp:  time.Now(),
-		Price:      price,
-		Metadata:   make(map[string]float64),
-		Reason:     reason,
-		Confidence: 1.0,
+		Type:        signalType,
+		Symbol:      symbol,
+		Timestamp:   time.Now(),
+		Price:       price,
+		Metadata:    make(map[string]float64),
+		Reason:      reason,
+		AddPosition: false,
 	}
 }
 
@@ -51,10 +51,10 @@ func WithMetadata(s *TradingSignal, key string, value float64) *TradingSignal {
 }
 
 // WithConfidence 设置信号置信度（辅助函数）
-func WithConfidence(s *TradingSignal, confidence float64) *TradingSignal {
-	s.Confidence = confidence
-	return s
-}
+//func WithConfidence(s *TradingSignal, confidence float64) *TradingSignal {
+//	s.Confidence = confidence
+//	return s
+//}
 
 // IsEntry 判断是否为入场信号
 func IsEntry(s *TradingSignal) bool {
@@ -89,7 +89,7 @@ func SignalString(s *TradingSignal) string {
 		s.Type,
 		s.Price,
 		s.Reason,
-		s.Confidence,
+		s.AddPosition,
 	)
 }
 

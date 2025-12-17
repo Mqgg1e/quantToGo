@@ -236,10 +236,20 @@ func ToOrderStatus(status OrderStatus) core.OrderStatus {
 // ToOrderType 转换订单类型
 func ToOrderType(orderType FuturesOrderType) core.OrderType {
 	switch orderType {
-	case OrderTypeMarket, OrderTypeStopMarket, OrderTypeTakeProfitMarket:
+	case OrderTypeMarket:
 		return core.OrderTypeMarket
-	case OrderTypeLimit, OrderTypeStop, OrderTypeTakeProfit:
+	case OrderTypeLimit:
 		return core.OrderTypeLimit
+	case OrderTypeStopMarket:
+		return core.OrderTypeStopMarket
+	case OrderTypeStop:
+		return core.OrderTypeStopLimit
+	case OrderTypeTakeProfit:
+		return core.OrderTypeTakeProfit
+	case OrderTypeTakeProfitMarket:
+		return core.OrderTypeTakeProfit
+	case OrderTypeTrailingStopMarket:
+		return core.OrderTypeTrailingStop
 	default:
 		return core.OrderTypeMarket
 	}

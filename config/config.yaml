@@ -60,7 +60,7 @@ strategy:
 position:
   default_leverage: 5
   default_margin_mode: "ISOLATED"  # ISOLATED | CROSS
-  max_position_size: 0.50  # 最大仓位占总资金% (需要>=40%才能让加仓生效)
+  max_position_size: 0.05  # 最大仓位占总资金% (需要>=40%才能让加仓生效)
 
   # 风险限制
   risk_limits:
@@ -110,6 +110,7 @@ execution:
     base_url: "https://testnet.binancefuture.com"  # 测试网/模拟盘
     ws_base_url: "wss://stream.binancefuture.com"
     testnet: true
+    use_ws_order: true
 
   # 回测配置
   backtest:
@@ -122,7 +123,7 @@ execution:
   # 手续费配置
   fees:
     maker_fee: 0.0002  # 0.02%
-    taker_fee: 0.0004  # 0.04%
+    taker_fee: 0.0005  # 0.04%
 
   # 滑点配置
   slippage:

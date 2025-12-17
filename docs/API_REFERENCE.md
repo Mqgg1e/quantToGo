@@ -652,6 +652,17 @@ func (m *Manager) CheckTrailingStop(symbol string, currentPrice float64) (bool, 
 //   *LiveExecutor - 执行器实例
 func NewLiveExecutor(apiKey, secretKey, baseURL string, accountCache *cache.AccountCache) *LiveExecutor
 
+// EnableWebSocketOrder 启用 WebSocket 下单
+// 参数:
+//   ctx: context.Context - 上下文
+// 返回:
+//   error - 启用失败时的错误信息
+func (e *LiveExecutor) EnableWebSocketOrder(ctx context.Context) error
+
+// DisableWebSocketOrder 禁用 WebSocket 下单
+// 无参数和返回值
+func (e *LiveExecutor) DisableWebSocketOrder()
+
 // GetClient 获取币安客户端（用于UserDataStream）
 // 返回:
 //   *Client - 币安API客户端
@@ -663,7 +674,9 @@ func (e *LiveExecutor) GetClient() *Client
 func (e *LiveExecutor) SetAccountCache(cache *cache.AccountCache)
 
 // PlaceOrder 下单（实现Executor接口）
-// 注意: 不再缓存订单，由UserDataStream实时更新AccountCache
+// 注意: 
+//   - 根据配置自动选择 WebSocket 或 REST API 下单
+//   - 不再缓存订单，由UserDataStream实时更新AccountCache
 // 参数:
 //   ctx: context.Context - 上下文
 //   order: *core.Order - 订单详情
@@ -748,6 +761,117 @@ func (c *Client) SetLeverage(ctx context.Context, symbol string, leverage int) e
 // 返回:
 //   error - 设置失败时的错误信息
 func (c *Client) SetMarginType(ctx context.Context, symbol string, marginType MarginType) error
+```
+
+### 6.3 WSOrderClient
+
+WebSocket 订单客户端（Week 6 新增）。
+
+```go
+// NewWSOrderClient 创建 WebSocket 订单客户端
+// 参数:
+//   client: *Client - 币安API客户端（用于签名和配置）
+// 返回:
+//   *WSOrderClient - WebSocket 订单客户端实例
+func NewWSOrderClient(client *Client) *WSOrderClient
+
+// Start 启动 WebSocket 连接
+// 参数:
+//   ctx: context.Context - 上下文
+// 返回:
+//   error - 连接失败时的错误信息
+func (w *WSOrderClient) Start(ctx context.Context) error
+
+// Stop 停止 WebSocket 连接
+// 无参数和返回值
+func (w *WSOrderClient) Stop()
+
+// PlaceMarketOrder 市价单（入场）
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   side: core.OrderSide - 买卖方向
+//   quantity: float64 - 数量
+// 返回:
+//   *core.Order - 订单信息
+//   error - 下单失败时的错误信息
+func (w *WSOrderClient) PlaceMarketOrder(ctx context.Context, symbol string, side core.OrderSide, quantity float64) (*core.Order, error)
+
+// PlaceLimitOrder 限价单（入场）
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   side: core.OrderSide - 买卖方向
+//   quantity: float64 - 数量
+//   price: float64 - 价格
+//   timeInForce: string - 有效期类型（GTC/IOC/FOK）
+// 返回:
+//   *core.Order - 订单信息
+//   error - 下单失败时的错误信息
+func (w *WSOrderClient) PlaceLimitOrder(ctx context.Context, symbol string, side core.OrderSide, quantity float64, price float64, timeInForce string) (*core.Order, error)
+
+// ClosePositionMarket 市价单（"手动"出场，市价平掉某币种全部仓位）
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   side: core.OrderSide - 买卖方向（与持仓相反）
+//   quantity: float64 - 数量
+// 返回:
+//   *core.Order - 订单信息
+//   error - 平仓失败时的错误信息
+func (w *WSOrderClient) ClosePositionMarket(ctx context.Context, symbol string, side core.OrderSide, quantity float64) (*core.Order, error)
+
+// PlaceStopLossOrder 止损单（STOP_MARKET，到触发价市价平掉某币种全部仓位）
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   side: core.OrderSide - 买卖方向（与持仓相反）
+//   triggerPrice: float64 - 触发价格
+// 返回:
+//   *core.Order - 订单信息
+//   error - 下单失败时的错误信息
+func (w *WSOrderClient) PlaceStopLossOrder(ctx context.Context, symbol string, side core.OrderSide, triggerPrice float64) (*core.Order, error)
+
+// PlaceTrailingStopOrder 跟踪止损单（TRAILING_STOP_MARKET，平掉全部仓位）
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   side: core.OrderSide - 买卖方向（与持仓相反）
+//   activatePrice: float64 - 激活价格（0 表示默认当前市场价）
+//   callbackRate: float64 - 回调比例（0.1-10，单位%，1 表示 1%）
+// 返回:
+//   *core.Order - 订单信息
+//   error - 下单失败时的错误信息
+func (w *WSOrderClient) PlaceTrailingStopOrder(ctx context.Context, symbol string, side core.OrderSide, activatePrice float64, callbackRate float64) (*core.Order, error)
+
+// CancelOrder 撤销订单
+// 参数:
+//   ctx: context.Context - 上下文
+//   symbol: string - 交易对
+//   orderID: int64 - 订单ID
+// 返回:
+//   error - 撤销失败时的错误信息
+func (w *WSOrderClient) CancelOrder(ctx context.Context, symbol string, orderID int64) error
+```
+
+**WebSocket 订单特点**:
+- ⚡ 低延迟（< 50ms vs REST 100-200ms）
+- 🔄 自动重连（最多5次重试）
+- 💓 心跳保活（54秒间隔）
+- 🔐 完整签名支持
+- 🛡️ 错误处理和降级
+
+**使用示例**:
+```go
+// 在配置中启用
+execution:
+  binance:
+    use_ws_order: true
+
+// 或程序中手动启用
+if err := executor.EnableWebSocketOrder(ctx); err != nil {
+    log.Printf("WebSocket 启用失败，使用 REST API")
+}
 ```
 
 ---

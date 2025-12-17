@@ -98,11 +98,12 @@ type ExecutionConfig struct {
 
 // BinanceConfig 币安API配置
 type BinanceConfig struct {
-	APIKey    string `mapstructure:"api_key"`
-	SecretKey string `mapstructure:"secret_key"`
-	BaseURL   string `mapstructure:"base_url"`
-	WSBaseURL string `mapstructure:"ws_base_url"`
-	Testnet   bool   `mapstructure:"testnet"`
+	APIKey     string `mapstructure:"api_key"`
+	SecretKey  string `mapstructure:"secret_key"`
+	BaseURL    string `mapstructure:"base_url"`
+	WSBaseURL  string `mapstructure:"ws_base_url"`
+	Testnet    bool   `mapstructure:"testnet"`
+	UseWSOrder bool   `mapstructure:"use_ws_order"` // 是否使用 WebSocket 下单（默认 false）
 }
 
 // BacktestConfig 回测配置
@@ -253,7 +254,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("position.risk_limits.max_daily_loss", 0.05)
 	v.SetDefault("position.risk_limits.max_open_positions", 3)
 	v.SetDefault("position.position_sizing.method", "fixed")
-	v.SetDefault("position.position_sizing.fixed_percent", 0.2)
+	v.SetDefault("position.position_sizing.open_percent", 0.2)
+	v.SetDefault("position.position_sizing.add_percent", 0.4)
 
 	// Execution
 	v.SetDefault("execution.mode", "backtest")

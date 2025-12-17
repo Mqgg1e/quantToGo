@@ -67,13 +67,13 @@ const (
 
 // TradingSignal 交易信号
 type TradingSignal struct {
-	Type       SignalType         // 信号类型
-	Symbol     string             // 交易对
-	Timestamp  time.Time          // 信号生成时间
-	Price      float64            // 触发价格
-	Metadata   map[string]float64 // 额外元数据（如指标值）
-	Reason     string             // 信号原因（用于日志）
-	Confidence float64            // 信号置信度 [0.0, 1.0]
+	Type        SignalType         // 信号类型
+	Symbol      string             // 交易对
+	Timestamp   time.Time          // 信号生成时间
+	Price       float64            // 触发价格
+	Metadata    map[string]float64 // 额外元数据（如指标值）
+	Reason      string             // 信号原因（用于日志）
+	AddPosition bool               // 信号置信度 [0.0, 1.0]
 }
 
 // Strategy 策略接口
@@ -189,22 +189,23 @@ const (
 
 // Order 订单结构
 type Order struct {
-	ID         string                 // 订单ID（本地生成或交易所返回）
-	Symbol     string                 // 交易对
-	Type       OrderType              // 订单类型
-	Side       OrderSide              // 订单方向
-	Price      float64                // 价格（限价单）
-	Quantity   float64                // 数量
-	StopPrice  float64                // 触发价格（止损/止盈单）
-	Status     OrderStatus            // 订单状态
-	Leverage   int                    // 杠杆倍数
-	MarginMode MarginMode             // 保证金模式
-	FilledQty  float64                // 已成交数量
-	AvgPrice   float64                // 成交均价
-	Commission float64                // 手续费
-	CreateTime time.Time              // 创建时间
-	UpdateTime time.Time              // 更新时间
-	Metadata   map[string]interface{} // 额外信息
+	ID              string                 // 订单ID（本地生成或交易所返回）
+	Symbol          string                 // 交易对
+	Type            OrderType              // 订单类型
+	Side            OrderSide              // 订单方向
+	Price           float64                // 价格（限价单）
+	Quantity        float64                // 数量
+	StopPrice       float64                // 触发价格（止损/止盈单）
+	Status          OrderStatus            // 订单状态
+	Leverage        int                    // 杠杆倍数
+	MarginMode      MarginMode             // 保证金模式
+	FilledQty       float64                // 已成交数量
+	AvgPrice        float64                // 成交均价
+	Commission      float64                // 手续费
+	CreateTime      time.Time              // 创建时间
+	UpdateTime      time.Time              // 更新时间
+	Metadata        map[string]interface{} // 额外信息
+	ActivationPrice float64
 }
 
 // Executor 执行器接口（支持回测和实盘）

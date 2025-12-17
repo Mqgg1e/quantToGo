@@ -15,6 +15,8 @@ import (
 type LiveExecutor struct {
 	client       *Client
 	accountCache *cache.AccountCache // 账户缓存（替代本地缓存）
+	wsOrder      *WSOrderClient      // WebSocket 订单客户端
+	useWSOrder   bool                // 是否使用 WebSocket 下单
 	mu           sync.RWMutex        // 保护非缓存字段的锁
 }
 
@@ -23,7 +25,39 @@ func NewLiveExecutor(apiKey, secretKey, baseURL string, accountCache *cache.Acco
 	return &LiveExecutor{
 		client:       NewClient(apiKey, secretKey, baseURL),
 		accountCache: accountCache,
+		useWSOrder:   false, // 默认使用 REST API
 	}
+}
+
+// EnableWebSocketOrder 启用 WebSocket 下单
+func (e *LiveExecutor) EnableWebSocketOrder(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.wsOrder != nil {
+		return nil // 已启用
+	}
+
+	wsOrder := NewWSOrderClient(e.client)
+	if err := wsOrder.Start(ctx); err != nil {
+		return fmt.Errorf("start websocket order: %w", err)
+	}
+
+	e.wsOrder = wsOrder
+	e.useWSOrder = true
+	return nil
+}
+
+// DisableWebSocketOrder 禁用 WebSocket 下单
+func (e *LiveExecutor) DisableWebSocketOrder() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.wsOrder != nil {
+		e.wsOrder.Stop()
+		e.wsOrder = nil
+	}
+	e.useWSOrder = false
 }
 
 // GetClient 获取币安客户端（用于 UserDataStream）
@@ -45,6 +79,74 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 		order.ID = fmt.Sprintf("go_%d", time.Now().UnixNano())
 	}
 
+	// 检查是否使用 WebSocket 下单
+	e.mu.RLock()
+	useWS := e.useWSOrder && e.wsOrder != nil
+	wsOrder := e.wsOrder
+	e.mu.RUnlock()
+
+	if useWS {
+		return e.placeOrderViaWebSocket(ctx, order, wsOrder)
+	}
+
+	// 使用 REST API 下单（原有逻辑）
+	return e.placeOrderViaREST(ctx, order)
+}
+
+// placeOrderViaWebSocket 通过 WebSocket 下单
+func (e *LiveExecutor) placeOrderViaWebSocket(ctx context.Context, order *core.Order, wsOrder *WSOrderClient) (*core.Order, error) {
+	// 根据订单类型路由到不同的 WebSocket 方法
+	switch order.Type {
+	case core.OrderTypeMarket:
+		// 市价单
+		if order.Metadata != nil {
+			if reduceOnly, ok := order.Metadata["reduce_only"].(bool); ok && reduceOnly {
+				// 平仓市价单
+				return wsOrder.ClosePositionMarket(ctx, order.Symbol, order.Side, order.Quantity)
+			}
+		}
+		// 开仓市价单
+		return wsOrder.PlaceMarketOrder(ctx, order.Symbol, order.Side, order.Quantity)
+
+	case core.OrderTypeLimit:
+		// 限价单
+		timeInForce := "GTC"
+		if order.Metadata != nil {
+			if tif, ok := order.Metadata["time_in_force"].(string); ok && tif != "" {
+				timeInForce = tif
+			}
+		}
+		return wsOrder.PlaceLimitOrder(ctx, order.Symbol, order.Side, order.Quantity, order.Price, timeInForce)
+
+	case core.OrderTypeStopMarket:
+		// 止损单
+		return wsOrder.PlaceStopLossOrder(ctx, order.Symbol, order.Side, order.StopPrice)
+
+	case core.OrderTypeTrailingStop:
+		// 跟踪止损单
+		callbackRate := 1.0 // 默认 1%
+		activatePrice := 0.0
+		quantity := order.Quantity
+		if order.Metadata != nil {
+			if rate, ok := order.Metadata["callback_rate"].(float64); ok {
+				callbackRate = rate
+			}
+			//if price, ok := order.Metadata["activate_price"].(float64); ok {
+			//	activatePrice = price
+			//}
+		}
+		if order.ActivationPrice > 0 {
+			activatePrice = order.ActivationPrice
+		}
+		return wsOrder.PlaceTrailingStopOrder(ctx, order.Symbol, order.Side, quantity, activatePrice, callbackRate)
+
+	default:
+		return nil, fmt.Errorf("unsupported order type for WebSocket: %v", order.Type)
+	}
+}
+
+// placeOrderViaREST 通过 REST API 下单（原有逻辑）
+func (e *LiveExecutor) placeOrderViaREST(ctx context.Context, order *core.Order) (*core.Order, error) {
 	// 构建请求
 	req := &CreateOrderRequest{
 		Symbol:           order.Symbol,
@@ -138,6 +240,10 @@ func (e *LiveExecutor) PlaceOrder(ctx context.Context, order *core.Order) (*core
 			// 我们的 callbackRate 是小数（0.5 表示 0.5%）
 			req.CallbackRate = fmt.Sprintf("%.2f", callbackRate)
 		}
+
+		//if activatePrice, ok := order.Metadata["activate_price"].(float64); ok && activatePrice > 0 {
+		//	req.ActivatePrice = formatPrice(order.Symbol, activatePrice) // 使用 ActivatePrice 字段
+		//}
 
 		// 检查是否平掉全部仓位
 		if closePosition, ok := order.Metadata["close_position"].(bool); ok && closePosition {

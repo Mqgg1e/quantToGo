@@ -326,10 +326,12 @@ defer userStream.Stop()
 4. ✅ 修复死锁问题
 5. ✅ 文档更新
 
-### Week 6: WebSocket下单（可选）
-1. 实现 `internal/execution/binance/ws_order.go`
-2. 添加配置开关
-3. 测试 WebSocket 下单
+### Week 6: WebSocket下单 ✅ COMPLETED
+1. ✅ 实现 `internal/execution/binance/ws_order.go`
+2. ✅ 添加配置开关 (use_ws_order)
+3. ✅ 集成到 executor.go
+4. ✅ 创建测试程序 `cmd/test-ws-order/main.go`
+5. ✅ 所有编译通过
 
 ---
 
@@ -403,6 +405,45 @@ defer userStream.Stop()
 - [x] 订单更新处理测试
 - [x] 断连重连测试
 - [x] ListenKey 保活测试
+
+### WebSocket 订单
+- [x] 客户端创建测试（单元测试）
+- [x] URL 生成测试（测试网/生产）
+- [x] 参数签名测试（HMAC SHA256）
+- [x] 订单响应解析测试
+- [x] 订单类型转换测试（4种类型）
+- [x] 订单方向转换测试
+- [x] 订单状态转换测试（5种状态）
+- [x] Stop 函数安全性测试
+- [x] 性能基准测试
+  - 签名性能：~7.8µs/op（162,866 ops/s）
+  - 响应解析：~1.2µs/op（1,080,662 ops/s）
+- [x] 测试覆盖率：8.1%
+- [x] 全部 16 个测试通过
+
+**运行单元测试**:
+```bash
+# 运行所有测试
+go test ./internal/execution/binance/... -v
+
+# 运行特定测试
+go test ./internal/execution/binance/... -v -run TestWSOrder
+
+# 查看覆盖率
+go test ./internal/execution/binance/... -cover
+
+# 运行基准测试
+go test ./internal/execution/binance/... -bench=. -benchmem
+```
+
+**运行集成测试**:
+```bash
+# 使用脚本
+./scripts/test-ws-order.sh
+
+# 直接运行
+go run cmd/test-ws-order/main.go
+```
 
 **运行测试**:
 ```bash

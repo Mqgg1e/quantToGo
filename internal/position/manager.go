@@ -15,25 +15,35 @@ import (
 )
 
 // Manager 仓位管理器
+// 持仓信息由accountCache维护（通过UserDataStream实时更新）
+// Manager只存储策略特定的元数据
 type Manager struct {
 	config       *config.PositionConfig
 	executor     core.Executor
-	accountCache *cache.AccountCache // 账户缓存（替代本地持仓缓存）
+	accountCache *cache.AccountCache
 	mu           sync.RWMutex
-	positions    map[string]*PositionState // key: symbol (仅存储策略特定状态)
+
+	// 只存储策略特定的元数据，不存储持仓本身
+	metadata map[string]*PositionMetadata
 }
 
-// PositionState 持仓状态（扩展信息）
-type PositionState struct {
-	*core.Position
-	HighestProfit      float64   // 最高盈利（用于回撤计算）
-	HighestProfitPrice float64   // 最高盈利时的价格
-	StopLossPrice      float64   // 止损价格
-	StopLossOrderID    string    // 止损订单ID
-	TrailingStopLevel  int       // 跟踪止盈级别（1-4）
-	AddPositionCount   int       // 加仓次数（限制为1次）
-	OpenTime           time.Time // 开仓时间（用于判断加仓时机）
-	LastUpdateTime     time.Time // 最后更新时间
+// PositionMetadata 策略特定的持仓元数据
+//type PositionMetadata struct {
+//	HighestProfit      float64   // 最高盈利（用于跟踪止盈）
+//	HighestProfitPrice float64   // 最高盈利价格
+//	TrailingStopLevel  int       // 跟踪止盈级别
+//	AddPositionCount   int       // 加仓次数
+//	OpenTime           time.Time // 开仓时间
+//}
+
+type PositionMetadata struct {
+	AddPositionCount int // 加仓次数（最多2次）
+	OpenTime         time.Time
+	StopLossOrderID  string // 止损单ID
+	TrailingStopID   string // 跟踪止盈单ID
+
+	LastSignalType core.SignalType // 最近一次处理的信号类型
+	LastSignalTime time.Time       // 最近一次信号的时间
 }
 
 // NewManager 创建仓位管理器
@@ -42,7 +52,7 @@ func NewManager(cfg *config.PositionConfig, executor core.Executor, accountCache
 		config:       cfg,
 		executor:     executor,
 		accountCache: accountCache,
-		positions:    make(map[string]*PositionState),
+		metadata:     make(map[string]*PositionMetadata),
 	}
 }
 
@@ -54,233 +64,193 @@ func (m *Manager) ProcessSignal(signal *core.TradingSignal, currentPrice float64
 	defer m.mu.Unlock()
 
 	symbol := signal.Symbol
-	position, hasPosition := m.positions[symbol]
+	position, hasPosition := m.accountCache.GetPosition(symbol)
 
-	// 1. 检查反向信号 - 需要先平仓
-	if hasPosition {
-		needClose := false
-		if position.Side == core.PositionSideLong && (signal.Type == core.SignalTypeOpenShort) {
-			needClose = true // 持有多单，出现空单信号
-		} else if position.Side == core.PositionSideShort && (signal.Type == core.SignalTypeOpenLong) {
-			needClose = true // 持有空单，出现多单信号
+	var orders []*core.Order
+
+	// 情况1: 无持仓 - 只处理开仓信号
+	if !hasPosition {
+		if signal.Type == core.SignalTypeOpenLong {
+			order, err := m.createOpenOrder(signal, currentPrice, core.PositionSideLong)
+			if err != nil {
+				return nil, err
+			}
+			orders = append(orders, order)
+
+			m.metadata[symbol] = &PositionMetadata{
+				OpenTime:         time.Now(),
+				AddPositionCount: 0, // 初始加仓次数为0
+			}
+
+			logger.Info("Opening long position",
+				zap.String("symbol", symbol),
+				zap.Float64("price", currentPrice),
+			)
+		} else if signal.Type == core.SignalTypeOpenShort {
+			order, err := m.createOpenOrder(signal, currentPrice, core.PositionSideShort)
+			if err != nil {
+				return nil, err
+			}
+			orders = append(orders, order)
+
+			m.metadata[symbol] = &PositionMetadata{
+				OpenTime:         time.Now(),
+				AddPositionCount: 0,
+				LastSignalType:   signal.Type,
+				LastSignalTime:   time.Now(),
+			}
+
+			logger.Info("Opening short position",
+				zap.String("symbol", symbol),
+				zap.Float64("price", currentPrice),
+			)
 		}
 
-		if needClose {
-			// 取消旧的止损单（如果存在）
-			if position.StopLossOrderID != "" {
-				ctx := context.Background()
-				err := m.executor.CancelOrder(ctx, symbol, position.StopLossOrderID)
-				if err != nil {
-					logger.Warn("Failed to cancel stop loss order on reverse close",
-						zap.String("symbol", symbol),
-						zap.String("order_id", position.StopLossOrderID),
-						zap.Error(err),
-					)
-				} else {
-					logger.Info("Cancelled stop loss order on reverse close",
-						zap.String("symbol", symbol),
-						zap.String("order_id", position.StopLossOrderID),
-					)
-				}
-			}
+		return orders, nil
+	}
 
-			// 生成平仓订单
-			closeOrder, err := m.createCloseOrder(symbol, position, currentPrice)
-			if err != nil {
-				return nil, fmt.Errorf("create close order: %w", err)
-			}
+	// 情况2: 有持仓
+	meta := m.metadata[symbol]
+	if meta == nil {
+		meta = &PositionMetadata{
+			OpenTime:         time.Now(),
+			AddPositionCount: 0,
+		}
+		m.metadata[symbol] = meta
+	}
 
-			// ⚠️ 不要立即删除持仓状态！
-			// 平仓订单提交后，持仓可能还没清空
-			// 应该等待 UpdatePosition 收到 Size=0 的更新后自动删除
-			// delete(m.positions, symbol)  // ← 删除这行
+	// ✅ 信号去重：如果相同信号在5分钟内重复，跳过
+	signalInterval := 3 * time.Minute // 可根据你的周期调整（如15分钟K线用15分钟）
+	if meta.LastSignalType == signal.Type && time.Since(meta.LastSignalTime) < signalInterval {
+		logger.Info("Duplicate signal ignored",
+			zap.String("symbol", symbol),
+			zap.String("signal_type", string(signal.Type)),
+			zap.Duration("time_since_last", time.Since(meta.LastSignalTime)),
+		)
+		return nil, nil
+	}
 
-			// 只返回平仓订单，不立即开新仓
-			// 等持仓清空后，下次信号再开仓
-			logger.Info("Closing position due to reverse signal, will open new position after close confirmed",
+	// 2.1 加仓（最多2次）
+	if signal.AddPosition {
+		// 检查加仓次数限制
+		if meta.AddPositionCount >= 2 {
+			logger.Warn("Max add position count reached",
 				zap.String("symbol", symbol),
-				zap.String("current_side", string(position.Side)),
-				zap.String("new_signal", string(signal.Type)),
+				zap.Int("current_count", meta.AddPositionCount),
+				zap.String("add reason", signal.Reason),
+			)
+			return nil, nil
+		}
+
+		// 检查方向一致性
+		if (position.Side == core.PositionSideLong && signal.Type == core.SignalTypeOpenLong) ||
+			(position.Side == core.PositionSideShort && signal.Type == core.SignalTypeOpenShort) {
+
+			order, err := m.createAddOrder(signal, currentPrice, position.Side)
+			if err != nil {
+				return nil, err
+			}
+			orders = append(orders, order)
+
+			// 增加加仓次数
+			meta.AddPositionCount++
+			meta.LastSignalType = signal.Type // ✅ 更新信号类型
+			meta.LastSignalTime = time.Now()
+
+			logger.Info("Adding to position",
+				zap.String("symbol", symbol),
+				zap.String("side", string(position.Side)),
+				zap.Int("add_count", meta.AddPositionCount),
 			)
 
-			return []*core.Order{closeOrder}, nil
+			return orders, nil
 		}
 	}
 
-	// 2. 处理开仓信号
-	if signal.Type == core.SignalTypeOpenLong || signal.Type == core.SignalTypeOpenShort {
-		if hasPosition {
-			// 已有持仓，检查是否满足加仓条件（三个交叉都满足）
-			addPositionValue, hasAddEligible := signal.Metadata["add_position_eligible"]
-			canAddPosition := hasAddEligible && addPositionValue == 1.0
+	// 2.2 反向信号：平仓 + 开反向仓
+	if (position.Side == core.PositionSideLong && signal.Type == core.SignalTypeOpenShort) ||
+		(position.Side == core.PositionSideShort && signal.Type == core.SignalTypeOpenLong) {
 
-			if canAddPosition {
-				// 检查方向是否一致
-				if (signal.Type == core.SignalTypeOpenLong && position.Side == core.PositionSideLong) ||
-					(signal.Type == core.SignalTypeOpenShort && position.Side == core.PositionSideShort) {
-
-					// 检查加仓次数限制（只允许加仓1次）
-					if position.AddPositionCount >= 1 {
-						logger.Info("Add position limit reached, ignoring signal",
-							zap.String("symbol", symbol),
-							zap.Int("add_count", position.AddPositionCount),
-							zap.String("reason", "maximum 1 add allowed"),
-						)
-						return nil, nil
-					}
-
-					// 检查是否在开仓后的时间窗口内（最多3个K线周期）
-					// 使用10分钟作为通用窗口，可覆盖3x3分钟K线
-					maxAddWindow := 10 * time.Minute
-					timeSinceOpen := time.Since(position.OpenTime)
-					if timeSinceOpen > maxAddWindow {
-						logger.Info("Add position window expired, ignoring signal",
-							zap.String("symbol", symbol),
-							zap.Duration("time_since_open", timeSinceOpen),
-							zap.Duration("max_window", maxAddWindow),
-							zap.String("reason", "add position only allowed within 10 minutes of initial open"),
-						)
-						return nil, nil
-					}
-
-					// 方向一致且满足加仓条件，执行加仓
-					logger.Info("Add position condition met, adding to position",
-						zap.String("symbol", symbol),
-						zap.String("signal_type", string(signal.Type)),
-						zap.String("position_side", string(position.Side)),
-						zap.Int("current_add_count", position.AddPositionCount),
-						zap.Duration("time_since_open", timeSinceOpen),
-					)
-
-					order, err := m.createAddOrder(signal, currentPrice)
-					if err != nil {
-						return nil, err
-					}
-
-					// 增加加仓次数
-					position.AddPositionCount++
-
-					return []*core.Order{order}, nil
-				}
-			}
-
-			// 已有持仓但不满足加仓条件或方向不一致，忽略
-			return nil, nil
+		// 先取消所有挂单
+		if err := m.cancelAllOrders(context.Background(), symbol); err != nil {
+			logger.Error("Failed to cancel orders before reverse",
+				zap.String("symbol", symbol),
+				zap.Error(err),
+			)
 		}
 
-		order, err := m.createOpenOrder(signal, currentPrice)
+		// 平仓
+		closeOrder := m.createCloseOrder(symbol, position, currentPrice)
+		orders = append(orders, closeOrder)
+
+		// 开反向仓
+		var newSide core.PositionSide
+		if signal.Type == core.SignalTypeOpenShort {
+			newSide = core.PositionSideShort
+		} else {
+			newSide = core.PositionSideLong
+		}
+
+		openOrder, err := m.createOpenOrder(signal, currentPrice, newSide)
 		if err != nil {
 			return nil, err
 		}
+		orders = append(orders, openOrder)
 
-		return []*core.Order{order}, nil
+		// 重置 metadata
+		//m.metadata[symbol] = &PositionMetadata{
+		//	OpenTime:         time.Now(),
+		//	AddPositionCount: 0,
+		//}
+		meta.AddPositionCount = 0
+		meta.LastSignalType = signal.Type // ✅ 更新信号类型
+		meta.LastSignalTime = time.Now()
+
+		logger.Info("Reversing position",
+			zap.String("symbol", symbol),
+			zap.String("from", string(position.Side)),
+			zap.String("to", string(newSide)),
+		)
 	}
 
-	// 3. 处理加仓信号
-	if signal.Type == core.SignalTypeAddLong || signal.Type == core.SignalTypeAddShort {
-		if !hasPosition {
-			// 无持仓，无法加仓
-			return nil, nil
-		}
-
-		// 检查方向是否一致
-		if (signal.Type == core.SignalTypeAddLong && position.Side != core.PositionSideLong) ||
-			(signal.Type == core.SignalTypeAddShort && position.Side != core.PositionSideShort) {
-			// 方向不一致，忽略
-			return nil, nil
-		}
-
-		order, err := m.createAddOrder(signal, currentPrice)
-		if err != nil {
-			return nil, err
-		}
-
-		return []*core.Order{order}, nil
-	}
-
-	// 4. 处理平仓信号
-	if signal.Type == core.SignalTypeCloseLong || signal.Type == core.SignalTypeCloseShort {
-		if !hasPosition {
-			return nil, nil
-		}
-
-		order, err := m.createCloseOrder(symbol, position, currentPrice)
-		if err != nil {
-			return nil, err
-		}
-
-		delete(m.positions, symbol)
-		return []*core.Order{order}, nil
-	}
-
-	return nil, nil
+	return orders, nil
 }
 
-// UpdatePosition 更新持仓信息
+// UpdatePosition 更新持仓元数据（持仓本身由cache管理）
 func (m *Manager) UpdatePosition(position *core.Position) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 持仓清空时删除元数据
 	if position.Size == 0 {
-		// 持仓已清空
-		delete(m.positions, position.Symbol)
+		delete(m.metadata, position.Symbol)
 		return nil
 	}
 
-	// 获取或创建持仓状态
-	state, exists := m.positions[position.Symbol]
-	if !exists {
-		state = &PositionState{
-			Position:           position,
-			HighestProfit:      position.UnrealizedPnLPercent,
-			HighestProfitPrice: position.CurrentPrice,
-			StopLossPrice:      m.calculateStopLossPrice(position),
-			StopLossOrderID:    "",
-			TrailingStopLevel:  0,
-			AddPositionCount:   0,
-			OpenTime:           time.Now(), // 记录开仓时间
-			LastUpdateTime:     time.Now(),
+	meta := m.metadata[position.Symbol]
+	if meta == nil {
+		meta = &PositionMetadata{
+			OpenTime:         time.Now(),
+			AddPositionCount: 0,
 		}
-		m.positions[position.Symbol] = state
-	} else {
-		// 更新持仓信息
-		state.Position = position
-		state.LastUpdateTime = time.Now()
-
-		// 更新最高盈利
-		if position.UnrealizedPnLPercent > state.HighestProfit {
-			state.HighestProfit = position.UnrealizedPnLPercent
-			state.HighestProfitPrice = position.CurrentPrice
-		}
+		m.metadata[position.Symbol] = meta
 	}
 
 	return nil
 }
 
-// GetPosition 获取持仓
+// GetPosition 获取持仓（从cache）
 func (m *Manager) GetPosition(symbol string) (*core.Position, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	state, exists := m.positions[symbol]
+	position, exists := m.accountCache.GetPosition(symbol)
 	if !exists {
 		return nil, nil
 	}
-
-	return state.Position, nil
+	return position, nil
 }
 
-// GetAllPositions 获取所有持仓
+// GetAllPositions 获取所有持仓（从cache）
 func (m *Manager) GetAllPositions() ([]*core.Position, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	positions := make([]*core.Position, 0, len(m.positions))
-	for _, state := range m.positions {
-		positions = append(positions, state.Position)
-	}
-
-	return positions, nil
+	return m.accountCache.GetAllPositions(), nil
 }
 
 // CheckRisk 风险检查
@@ -289,7 +259,8 @@ func (m *Manager) CheckRisk(order *core.Order) error {
 	defer m.mu.RUnlock()
 
 	// 1. 检查最大持仓数
-	if len(m.positions) >= m.config.RiskLimits.MaxOpenPositions {
+	allPositions := m.accountCache.GetAllPositions()
+	if len(allPositions) >= m.config.RiskLimits.MaxOpenPositions {
 		return fmt.Errorf("max open positions reached: %d", m.config.RiskLimits.MaxOpenPositions)
 	}
 
@@ -302,6 +273,110 @@ func (m *Manager) CheckRisk(order *core.Order) error {
 	if order.Quantity <= 0 {
 		return fmt.Errorf("invalid quantity: %f", order.Quantity)
 	}
+
+	return nil
+}
+
+// UpdateRiskOrders 更新风控订单（加仓后调用）
+func (m *Manager) UpdateRiskOrders(ctx context.Context, symbol string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	position, exists := m.accountCache.GetPosition(symbol)
+	if !exists {
+		return fmt.Errorf("position not found: %s", symbol)
+	}
+
+	meta := m.metadata[symbol]
+	if meta == nil {
+		return fmt.Errorf("metadata not found: %s", symbol)
+	}
+
+	logger.Info("Updating risk orders after add position",
+		zap.String("symbol", symbol),
+		zap.Float64("new_size", position.Size),
+	)
+
+	// 1. 取消旧的止损单和跟踪止盈单
+	if err := m.cancelAllOrders(ctx, symbol); err != nil {
+		logger.Error("Failed to cancel old risk orders",
+			zap.String("symbol", symbol),
+			zap.Error(err),
+		)
+		// 继续执行，不中断
+	}
+
+	// 2. 设置新的止损单和跟踪止盈单（使用最新的仓位数量）
+	return m.setRiskOrders(ctx, symbol, position, meta)
+}
+
+// setRiskOrders 设置风控订单（内部方法，不加锁）
+func (m *Manager) setRiskOrders(ctx context.Context, symbol string, position *core.Position, meta *PositionMetadata) error {
+	// 确定平仓方向
+	var stopSide core.OrderSide
+	if position.Side == core.PositionSideLong {
+		stopSide = core.OrderSideSell
+	} else {
+		stopSide = core.OrderSideBuy
+	}
+
+	// 1. 设置固定止损单
+	stopLossPrice := m.calculateStopLossPrice(position)
+	stopOrder := &core.Order{
+		Symbol:    symbol,
+		Type:      core.OrderTypeStopMarket,
+		Leverage:  m.config.DefaultLeverage,
+		Side:      stopSide,
+		Quantity:  position.Size, // ✅ 使用最新仓位数量
+		StopPrice: stopLossPrice,
+		Metadata: map[string]interface{}{
+			"stop_price": stopLossPrice,
+		},
+	}
+
+	logger.Info("Placing updated stop loss order",
+		zap.String("symbol", symbol),
+		zap.Float64("quantity", position.Size),
+		zap.Float64("stop_price", stopLossPrice),
+	)
+
+	stopResult, err := m.executor.PlaceOrder(ctx, stopOrder)
+	if err != nil {
+		return fmt.Errorf("place stop loss failed: %w", err)
+	}
+	meta.StopLossOrderID = stopResult.ID
+
+	// 2. 设置跟踪止盈单
+	activationPrice := m.calculateTrailingActivationPrice(position)
+	trailingOrder := &core.Order{
+		Symbol:          symbol,
+		Type:            core.OrderTypeTrailingStop,
+		Leverage:        m.config.DefaultLeverage,
+		Side:            stopSide,
+		Quantity:        position.Size, // ✅ 使用最新仓位数量
+		ActivationPrice: activationPrice,
+		Metadata: map[string]interface{}{
+			"callback_rate": 0.6,
+		},
+	}
+
+	logger.Info("Placing updated trailing stop order",
+		zap.String("symbol", symbol),
+		zap.Float64("quantity", position.Size),
+		zap.Float64("activation_price", activationPrice),
+	)
+
+	trailingResult, err := m.executor.PlaceOrder(ctx, trailingOrder)
+	if err != nil {
+		return fmt.Errorf("place trailing stop failed: %w", err)
+	}
+	meta.TrailingStopID = trailingResult.ID
+
+	logger.Info("Risk orders updated successfully",
+		zap.String("symbol", symbol),
+		zap.String("stop_order_id", meta.StopLossOrderID),
+		zap.String("trailing_order_id", meta.TrailingStopID),
+	)
 
 	return nil
 }
@@ -320,13 +395,13 @@ func (m *Manager) CalculatePositionSize(signal *core.TradingSignal, accountBalan
 	}
 
 	// 计算使用的资金
-	usdtAmount := accountBalance * percent
+	usdtAmount := accountBalance * percent * m.config.MaxPositionSize
 
 	// 应用仓位大小限制
-	maxUsdt := accountBalance * m.config.MaxPositionSize
-	if usdtAmount > maxUsdt {
-		usdtAmount = maxUsdt
-	}
+	//maxUsdt := accountBalance * m.config.MaxPositionSize
+	//if usdtAmount > maxUsdt {
+	//	usdtAmount = maxUsdt
+	//}
 
 	return usdtAmount, nil
 }
@@ -334,7 +409,7 @@ func (m *Manager) CalculatePositionSize(signal *core.TradingSignal, accountBalan
 // ========== 私有方法 ==========
 
 // createOpenOrder 创建开仓订单
-func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float64) (*core.Order, error) {
+func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float64, positionSide core.PositionSide) (*core.Order, error) {
 	// 从账户缓存获取余额（UserDataStream实时更新）
 	accountBalance := m.accountCache.GetBalance()
 	if accountBalance == 0 {
@@ -349,13 +424,13 @@ func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float
 
 	// 确定订单方向
 	var side core.OrderSide
-	var positionSide core.PositionSide
+	//var positionSide core.PositionSide
 	if signal.Type == core.SignalTypeOpenLong {
 		side = core.OrderSideBuy
-		positionSide = core.PositionSideLong
+		//positionSide = core.PositionSideLong
 	} else {
 		side = core.OrderSideSell
-		positionSide = core.PositionSideShort
+		//positionSide = core.PositionSideShort
 	}
 
 	// 记录仓位计算
@@ -400,13 +475,13 @@ func (m *Manager) createOpenOrder(signal *core.TradingSignal, currentPrice float
 }
 
 // createAddOrder 创建加仓订单
-func (m *Manager) createAddOrder(signal *core.TradingSignal, currentPrice float64) (*core.Order, error) {
+func (m *Manager) createAddOrder(signal *core.TradingSignal, currentPrice float64, positionSide core.PositionSide) (*core.Order, error) {
 	// 加仓逻辑与开仓类似，只是比例不同（已在CalculatePositionSize中处理）
-	return m.createOpenOrder(signal, currentPrice)
+	return m.createOpenOrder(signal, currentPrice, positionSide)
 }
 
 // createCloseOrder 创建平仓订单
-func (m *Manager) createCloseOrder(symbol string, position *PositionState, currentPrice float64) (*core.Order, error) {
+func (m *Manager) createCloseOrder(symbol string, position *core.Position, currentPrice float64) *core.Order {
 	// 确定平仓方向
 	var side core.OrderSide
 	if position.Side == core.PositionSideLong {
@@ -421,258 +496,236 @@ func (m *Manager) createCloseOrder(symbol string, position *PositionState, curre
 		Type:       core.OrderTypeMarket,
 		Side:       side,
 		Quantity:   position.Size,
-		Leverage:   position.Leverage,   // 使用持仓的杠杆
-		MarginMode: position.MarginMode, // 使用持仓的保证金模式
+		Leverage:   position.Leverage,
+		MarginMode: position.MarginMode,
 		Metadata: map[string]interface{}{
 			"reduce_only":  true,
 			"close_reason": "signal_triggered",
 		},
 	}
 
-	return order, nil
+	return order
 }
 
-// calculateStopLossPrice 计算止损价格
-func (m *Manager) calculateStopLossPrice(position *core.Position) float64 {
-	stopLossPercent := 0.006 // 0.6%
-
-	if position.Side == core.PositionSideLong {
-		// 多单：止损价 = 入场价 * (1 - 0.6%)
-		return position.EntryPrice * (1 - stopLossPercent)
-	} else {
-		// 空单：止损价 = 入场价 * (1 + 0.6%)
-		return position.EntryPrice * (1 + stopLossPercent)
-	}
-}
-
-// CheckStopLoss 检查是否触发止损
-func (m *Manager) CheckStopLoss(symbol string, currentPrice float64) (bool, *core.Order) {
-	m.mu.RLock()
-	state, exists := m.positions[symbol]
-	m.mu.RUnlock()
-
-	if !exists {
-		return false, nil
-	}
-
-	// 检查固定止损
-	triggered := false
-	if state.Side == core.PositionSideLong && currentPrice <= state.StopLossPrice {
-		triggered = true
-	} else if state.Side == core.PositionSideShort && currentPrice >= state.StopLossPrice {
-		triggered = true
-	}
-
-	if triggered {
-		order, _ := m.createCloseOrder(symbol, state, currentPrice)
-		if order != nil {
-			order.Metadata["close_reason"] = "stop_loss"
-		}
-
-		m.mu.Lock()
-		delete(m.positions, symbol)
-		m.mu.Unlock()
-
-		return true, order
-	}
-
-	return false, nil
-}
-
-// CheckTrailingStop 检查跟踪止盈
-func (m *Manager) CheckTrailingStop(symbol string, currentPrice float64) (bool, *core.Order) {
+// SetStopLoss 开仓后立即设置止损单和跟踪止盈单
+func (m *Manager) SetStopLoss(ctx context.Context, symbol string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, exists := m.positions[symbol]
+	position, exists := m.accountCache.GetPosition(symbol)
 	if !exists {
-		return false, nil
+		return fmt.Errorf("position not found: %s", symbol)
 	}
 
-	profit := state.UnrealizedPnLPercent
-
-	// 确定当前级别和回调比例
-	var level int
-	var callbackRate float64 // Binance TRAILING_STOP_MARKET 使用的回调比例
-
-	if profit >= 1.8 {
-		level = 3
-		callbackRate = 0.68 // 0.68%
-	} else if profit >= 1.0 {
-		level = 2
-		callbackRate = 0.55 // 0.55%
-	} else if profit >= 0.6 {
-		level = 1
-		callbackRate = 0.5 // 0.5%
-	} else {
-		// 盈利不足 0.6%，不启用跟踪止盈
-		return false, nil
-	}
-
-	// 如果进入更高级别，需要撤销旧的跟踪止盈单，设置新的
-	if level > state.TrailingStopLevel {
-		logger.Info("Trailing stop level upgraded",
-			zap.String("symbol", symbol),
-			zap.Int("old_level", state.TrailingStopLevel),
-			zap.Int("new_level", level),
-			zap.Float64("profit", profit),
-		)
-
-		// 撤销旧的跟踪止盈单（如果存在）
-		if state.StopLossOrderID != "" {
-			ctx := context.Background()
-			_ = m.executor.CancelOrder(ctx, symbol, state.StopLossOrderID)
-			state.StopLossOrderID = ""
+	meta := m.metadata[symbol]
+	if meta == nil {
+		meta = &PositionMetadata{
+			OpenTime:         time.Now(),
+			AddPositionCount: 0,
 		}
+		m.metadata[symbol] = meta
+	}
 
-		// 设置新的 TRAILING_STOP_MARKET 单
-		if err := m.setTrailingStopOrder(symbol, state, callbackRate); err != nil {
-			logger.Error("Failed to set trailing stop order",
+	// 如果已经有止损单和跟踪止盈单，先取消
+	if meta.StopLossOrderID != "" || meta.TrailingStopID != "" {
+		logger.Info("Cancelling existing risk orders before setting new ones",
+			zap.String("symbol", symbol),
+		)
+		err := m.cancelAllOrders(ctx, symbol)
+		if err != nil {
+			return err
+		}
+	}
+	//
+	//// 1. 设置固定止损单（入场价 ± 0.6%）
+	//stopLossPrice := m.calculateStopLossPrice(position)
+	//var stopSide core.OrderSide
+	//if position.Side == core.PositionSideLong {
+	//	stopSide = core.OrderSideSell
+	//} else {
+	//	stopSide = core.OrderSideBuy
+	//}
+	//
+	//stopOrder := &core.Order{
+	//	Symbol:    symbol,
+	//	Type:      core.OrderTypeStopMarket,
+	//	Leverage:  m.config.DefaultLeverage,
+	//	Side:      stopSide,
+	//	Quantity:  position.Size,
+	//	StopPrice: stopLossPrice,
+	//	Metadata: map[string]interface{}{
+	//		"stop_price": stopLossPrice,
+	//		//"close_position": true,
+	//	},
+	//}
+	//
+	//logger.Info("Placing stop loss order",
+	//	zap.String("symbol", symbol),
+	//	zap.Float64("entry", position.EntryPrice),
+	//	zap.Float64("stop_price", stopLossPrice),
+	//)
+	//
+	//stopResult, err := m.executor.PlaceOrder(ctx, stopOrder)
+	//if err != nil {
+	//	return fmt.Errorf("place stop loss failed: %w", err)
+	//}
+	//meta.StopLossOrderID = stopResult.ID
+	//
+	//// 2. 设置跟踪止盈单（激活价变化0.6%，回撤0.6%）
+	//activationPrice := m.calculateTrailingActivationPrice(position)
+	//
+	//trailingOrder := &core.Order{
+	//	Symbol:          symbol,
+	//	Type:            core.OrderTypeTrailingStop,
+	//	Leverage:        m.config.DefaultLeverage,
+	//	Side:            stopSide,
+	//	Quantity:        position.Size,
+	//	ActivationPrice: activationPrice,
+	//	Metadata: map[string]interface{}{
+	//		"callback_rate": 0.6, // 回撤0.6%
+	//		//"activation_price": activationPrice,
+	//		//"close_position":   true,
+	//	},
+	//}
+	//
+	//logger.Info("Placing trailing stop order",
+	//	zap.String("symbol", symbol),
+	//	zap.Float64("activation_price", activationPrice),
+	//	zap.Float64("callback_rate", 0.6),
+	//)
+	//
+	//trailingResult, err := m.executor.PlaceOrder(ctx, trailingOrder)
+	//if err != nil {
+	//	return fmt.Errorf("place trailing stop failed: %w", err)
+	//}
+	//meta.TrailingStopID = trailingResult.ID
+	//
+	//logger.Info("Risk orders placed successfully",
+	//	zap.String("symbol", symbol),
+	//	zap.String("stop_order_id", meta.StopLossOrderID),
+	//	zap.String("trailing_order_id", meta.TrailingStopID),
+	//)
+
+	return m.setRiskOrders(ctx, symbol, position, meta)
+}
+
+// cancelAllOrders 取消所有挂单（内部方法，不加锁）
+func (m *Manager) cancelAllOrders(ctx context.Context, symbol string) error {
+	meta := m.metadata[symbol]
+	if meta == nil {
+		return nil
+	}
+
+	// 取消止损单
+	if meta.StopLossOrderID != "" {
+		err := m.executor.CancelOrder(ctx, symbol, meta.StopLossOrderID)
+		if err != nil {
+			logger.Error("Failed to cancel stop loss order",
 				zap.String("symbol", symbol),
-				zap.Int("level", level),
+				zap.String("order_id", meta.StopLossOrderID),
 				zap.Error(err),
 			)
+		} else {
+			logger.Info("Cancelled stop loss order", zap.String("symbol", symbol))
+			meta.StopLossOrderID = ""
 		}
-
-		state.TrailingStopLevel = level
-		state.HighestProfit = profit
-		state.HighestProfitPrice = currentPrice
 	}
 
-	// 更新最高盈利
-	if profit > state.HighestProfit {
-		state.HighestProfit = profit
-		state.HighestProfitPrice = currentPrice
+	// 取消跟踪止盈单
+	if meta.TrailingStopID != "" {
+		err := m.executor.CancelOrder(ctx, symbol, meta.TrailingStopID)
+		if err != nil {
+			logger.Error("Failed to cancel trailing stop order",
+				zap.String("symbol", symbol),
+				zap.String("order_id", meta.TrailingStopID),
+				zap.Error(err),
+			)
+		} else {
+			logger.Info("Cancelled trailing stop order", zap.String("symbol", symbol))
+			meta.TrailingStopID = ""
+		}
 	}
 
-	return false, nil
+	return nil
+}
+
+func (m *Manager) calculateStopLossPrice(position *core.Position) float64 {
+	percent := 0.006 // 0.6%
+	if position.Side == core.PositionSideLong {
+		return position.EntryPrice * (1 - percent)
+	}
+	return position.EntryPrice * (1 + percent)
+}
+
+func (m *Manager) calculateTrailingActivationPrice(position *core.Position) float64 {
+	percent := 0.006 // 0.6%
+	if position.Side == core.PositionSideLong {
+		return position.EntryPrice * (1 + percent)
+	}
+	return position.EntryPrice * (1 - percent)
 }
 
 // setTrailingStopOrder 设置跟踪止盈单
-func (m *Manager) setTrailingStopOrder(symbol string, state *PositionState, callbackRate float64) error {
-	ctx := context.Background()
-
-	// 确定平仓方向
-	var side core.OrderSide
-	if state.Side == core.PositionSideLong {
-		side = core.OrderSideSell
-	} else {
-		side = core.OrderSideBuy
-	}
-
-	// 创建 TRAILING_STOP_MARKET 订单
-	// 注意：Binance 的 callbackRate 需要乘以100（0.5% = 0.5）
-	order := &core.Order{
-		Symbol:   symbol,
-		Type:     core.OrderTypeTrailingStop,
-		Side:     side,
-		Quantity: state.Size,
-		Metadata: map[string]interface{}{
-			"callback_rate":  callbackRate, // 0.5, 0.55, 0.68
-			"close_position": true,         // 平掉全部仓位
-			"order_type":     "trailing_stop",
-		},
-	}
-
-	logger.Info("Setting trailing stop order",
-		zap.String("symbol", symbol),
-		zap.String("side", string(side)),
-		zap.Float64("quantity", order.Quantity),
-		zap.Float64("callback_rate", callbackRate),
-	)
-
-	// 提交订单
-	resultOrder, err := m.executor.PlaceOrder(ctx, order)
-	if err != nil {
-		return fmt.Errorf("place trailing stop order failed: %w", err)
-	}
-
-	// 保存订单ID（替换原来的止损单ID）
-	state.StopLossOrderID = resultOrder.ID
-
-	logger.Info("Trailing stop order placed successfully",
-		zap.String("symbol", symbol),
-		zap.String("order_id", resultOrder.ID),
-		zap.Float64("callback_rate", callbackRate),
-	)
-
-	return nil
-}
+//func (m *Manager) setTrailingStopOrder(symbol string, position *core.Position, callbackRate float64) error {
+//	ctx := context.Background()
+//
+//	// 确定平仓方向
+//	var side core.OrderSide
+//	if position.Side == core.PositionSideLong {
+//		side = core.OrderSideSell
+//	} else {
+//		side = core.OrderSideBuy
+//	}
+//
+//	// 创建 TRAILING_STOP_MARKET 订单
+//	// 注意：Binance 的 callbackRate 需要乘以100（0.5% = 0.5）
+//	order := &core.Order{
+//		Symbol:   symbol,
+//		Type:     core.OrderTypeTrailingStop,
+//		Side:     side,
+//		Quantity: position.Size,
+//		Metadata: map[string]interface{}{
+//			"callback_rate":  callbackRate, // 0.5, 0.55, 0.68
+//			"close_position": true,         // 平掉全部仓位
+//			"order_type":     "trailing_stop",
+//		},
+//	}
+//
+//	logger.Info("Setting trailing stop order",
+//		zap.String("symbol", symbol),
+//		zap.String("side", string(side)),
+//		zap.Float64("quantity", order.Quantity),
+//		zap.Float64("callback_rate", callbackRate),
+//	)
+//
+//	// 提交订单
+//	_, err := m.executor.PlaceOrder(ctx, order)
+//	if err != nil {
+//		return fmt.Errorf("place trailing stop order failed: %w", err)
+//	}
+//
+//	logger.Info("Trailing stop order placed successfully",
+//		zap.String("symbol", symbol),
+//		zap.Float64("callback_rate", callbackRate),
+//	)
+//
+//	return nil
+//}
 
 // SetStopLoss 设置止损单（开仓或加仓后调用）
-// 参数:
+//func (m *Manager) SetStopLoss(ctx context.Context, symbol string) error {
+//	position, exists := m.accountCache.GetPosition(symbol)
+//	if !exists {
+//		return fmt.Errorf("position not found for symbol: %s", symbol)
+//	}
 //
-//	ctx: context.Context - 上下文
-//	symbol: string - 交易对
+//	logger.Debug("SetStopLoss called",
+//		zap.String("symbol", symbol),
+//		zap.Float64("size", position.Size),
+//	)
 //
-// 返回:
+//	// 通用Manager使用价格检查方式进行止损，不设置交易所止损单
+//	// 止损由CheckStopLoss方法在价格更新时检查并触发
 //
-//	error - 设置失败时的错误信息
-func (m *Manager) SetStopLoss(ctx context.Context, symbol string) error {
-	m.mu.Lock()
-	state, exists := m.positions[symbol]
-	m.mu.Unlock()
-
-	if !exists {
-		return fmt.Errorf("position not found for symbol: %s", symbol)
-	}
-
-	// 如果已有止损单，先取消旧的
-	if state.StopLossOrderID != "" {
-		logger.Info("Canceling existing stop loss order",
-			zap.String("symbol", symbol),
-			zap.String("old_order_id", state.StopLossOrderID),
-		)
-		_ = m.executor.CancelOrder(ctx, symbol, state.StopLossOrderID)
-	}
-
-	// 创建止损单
-	var side core.OrderSide
-	if state.Side == core.PositionSideLong {
-		side = core.OrderSideSell // 多单用卖出止损
-	} else {
-		side = core.OrderSideBuy // 空单用买入止损
-	}
-
-	stopLossOrder := &core.Order{
-		Symbol:    symbol,
-		Type:      core.OrderTypeStopMarket, // 市价止损单
-		Side:      side,
-		Quantity:  state.Size, // 平掉全部仓位
-		StopPrice: state.StopLossPrice,
-		Leverage:  state.Leverage,
-		Metadata: map[string]interface{}{
-			"reduce_only":  true,
-			"order_type":   "stop_loss",
-			"stop_percent": 0.006, // 0.6%
-		},
-	}
-
-	logger.Info("Setting stop loss order",
-		zap.String("symbol", symbol),
-		zap.String("side", string(side)),
-		zap.Float64("quantity", stopLossOrder.Quantity),
-		zap.Float64("stop_price", stopLossOrder.StopPrice),
-		zap.Float64("entry_price", state.EntryPrice),
-		zap.Float64("stop_loss_percent", 0.6),
-	)
-
-	// 提交止损单
-	resultOrder, err := m.executor.PlaceOrder(ctx, stopLossOrder)
-	if err != nil {
-		return fmt.Errorf("place stop loss order failed: %w", err)
-	}
-
-	// 保存止损单ID
-	m.mu.Lock()
-	state.StopLossOrderID = resultOrder.ID
-	m.mu.Unlock()
-
-	logger.Info("Stop loss order placed successfully",
-		zap.String("symbol", symbol),
-		zap.String("order_id", resultOrder.ID),
-		zap.Float64("stop_price", stopLossOrder.StopPrice),
-	)
-
-	return nil
-}
+//	return nil
+//}

@@ -6,6 +6,107 @@
 
 ## 2025-12-12
 
+### 🎉 Week 6 完成 - WebSocket 下单实现
+
+**完成时间**: 2025-12-12 (Week 6)
+
+**核心功能**:
+
+#### 1. WebSocket 订单客户端 (`internal/execution/binance/ws_order.go`)
+- ✅ 实现完整的 WebSocket 订单接口
+- ✅ 支持测试网和生产环境自动切换
+- ✅ 连接管理：自动重连、心跳保活（54秒）
+- ✅ 请求/响应管理：UUID 生成、响应通道匹配
+- ✅ HMAC SHA256 签名支持
+
+**支持的订单类型**:
+1. `PlaceMarketOrder()` - 市价单开仓
+2. `PlaceLimitOrder()` - 限价单开仓
+3. `ClosePositionMarket()` - 市价平仓（reduceOnly）
+4. `PlaceStopLossOrder()` - 止损单（STOP_MARKET + closePosition）
+5. `PlaceTrailingStopOrder()` - 跟踪止损单（TRAILING_STOP_MARKET）
+6. `CancelOrder()` - 撤销订单
+
+#### 2. 执行器集成 (`internal/execution/binance/executor.go`)
+- ✅ 添加 `wsOrder` 和 `useWSOrder` 字段
+- ✅ 实现 `EnableWebSocketOrder()` 启用 WebSocket 下单
+- ✅ 实现 `DisableWebSocketOrder()` 禁用 WebSocket 下单
+- ✅ 修改 `PlaceOrder()` 路由：根据配置选择 REST/WebSocket
+- ✅ 新增 `placeOrderViaWebSocket()` WebSocket 下单逻辑
+- ✅ 新增 `placeOrderViaREST()` REST API 下单逻辑（保留原有代码）
+
+#### 3. 配置支持
+- ✅ 添加 `execution.binance.use_ws_order` 配置项（默认 false）
+- ✅ 更新 `config/config.example.yaml` 示例
+- ✅ 更新 `internal/config/config.go` 结构体
+
+#### 4. 主程序集成 (`cmd/live-trading/main.go`)
+- ✅ 在 UserDataStream 启动后检查配置
+- ✅ 根据配置启用 WebSocket 下单
+- ✅ 失败时自动降级到 REST API
+
+#### 5. 测试程序 (`cmd/test-ws-order/main.go`)
+- ✅ 创建交互式测试程序
+- ✅ 支持测试 6 种订单类型
+- ✅ 实时查看持仓和订单状态
+- ✅ 创建测试脚本 `scripts/test-ws-order.sh`
+
+**技术特性**:
+- 🔄 自动重连机制（最多5次，指数退避）
+- 🔐 完整的 API 签名支持
+- ⚡ 降低延迟（WebSocket vs REST）
+- 🛡️ 降级机制（WebSocket 失败时使用 REST）
+- 📊 支持代理配置
+
+**依赖变更**:
+- 新增: `github.com/google/uuid v1.6.0`
+
+**影响文件**:
+- 新建: `internal/execution/binance/ws_order.go` (562 行)
+- 修改: `internal/execution/binance/executor.go`
+- 修改: `internal/config/config.go`
+- 修改: `config/config.example.yaml`
+- 修改: `cmd/live-trading/main.go`
+- 新建: `cmd/test-ws-order/main.go` (260 行)
+- 新建: `scripts/test-ws-order.sh`
+
+**测试状态**:
+- ✅ 编译通过（无错误）
+- ✅ 单元测试通过（16个测试全部通过）
+- ✅ 测试覆盖率：8.1%
+- ✅ 基准测试：
+  - 签名性能：~7.8µs/op（162,866 ops/s）
+  - 响应解析：~1.2µs/op（1,080,662 ops/s）
+
+**测试清单**:
+- ✅ WebSocket 客户端创建
+- ✅ URL 生成（测试网/生产环境）
+- ✅ 参数签名（HMAC SHA256）
+- ✅ 查询字符串构建
+- ✅ 订单响应解析
+- ✅ 止损单响应解析
+- ✅ 错误响应处理
+- ✅ 订单类型转换（4种类型）
+- ✅ 订单方向转换
+- ✅ 订单状态转换（5种状态）
+- ✅ Stop 函数安全性
+- ✅ 数量和价格格式化
+
+**使用方法**:
+```yaml
+# 在 config/config.yaml 中启用
+execution:
+  binance:
+    use_ws_order: true  # 启用 WebSocket 下单
+```
+
+**性能优势**:
+- WebSocket 延迟 < 50ms（vs REST 100-200ms）
+- 避免 REST API 频率限制
+- 保持长连接，减少握手开销
+
+---
+
 ### 🐛 修复 InitFromRestAPI 死锁问题
 
 **问题**: 

@@ -86,7 +86,7 @@ func (a *Adapter) OnKline(kline *v2.KlineData) {
 	a.symbolLogger.Info("Signal generated",
 		zap.String("signal_type", string(signal.Type)),
 		zap.Float64("price", signal.Price),
-		zap.Float64("confidence", signal.Confidence),
+		zap.Bool("confidence", signal.AddPosition),
 		zap.String("reason", signal.Reason),
 	)
 
@@ -170,44 +170,23 @@ func (a *Adapter) executeOrder(ctx context.Context, order *core.Order) error {
 
 	// 如果是市价单且是开仓/加仓订单，等待成交后设置止损
 	if resultOrder.Type == core.OrderTypeMarket && isOpenOrAddOrder {
-		// 等待订单成交（市价单通常很快成交）
+		// 市价单通常立即成交，UserDataStream会实时推送状态更新
+		// 等待一下让UserDataStream有时间处理
 		time.Sleep(500 * time.Millisecond)
 
-		// 查询订单状态
-		filledOrder, err := a.executor.GetOrder(ctx, resultOrder.Symbol, resultOrder.ID)
-		if err != nil {
-			a.symbolLogger.Warn("Failed to query order status",
-				zap.String("order_id", resultOrder.ID),
-				zap.Error(err),
-			)
-			// 即使查询失败，也尝试设置止损
-		}
+		// 直接更新持仓，不需要查询订单状态
+		// UserDataStream已经实时更新了cache中的持仓信息
+		a.updatePositions(ctx)
 
-		// 检查订单是否成交
-		if filledOrder != nil && filledOrder.Status == core.OrderStatusFilled {
-			a.symbolLogger.Info("Order filled",
-				zap.String("order_id", filledOrder.ID),
-				zap.Float64("avg_price", filledOrder.AvgPrice),
-			)
-		}
-
-		// 开仓/加仓订单：设置止损单
-		a.symbolLogger.Info("Setting stop loss after order placed",
+		// 设置止损（当前实现使用价格检查方式，不设置交易所止损单）
+		a.symbolLogger.Debug("Calling SetStopLoss after order placed",
 			zap.String("symbol", resultOrder.Symbol),
 		)
 
-		// 先更新持仓，确保仓位管理器有最新数据
-		a.updatePositions(ctx)
-
-		// 设置止损单
 		if err := a.positionMgr.SetStopLoss(ctx, resultOrder.Symbol); err != nil {
 			a.symbolLogger.Error("Failed to set stop loss",
 				zap.String("symbol", resultOrder.Symbol),
 				zap.Error(err),
-			)
-		} else {
-			a.symbolLogger.Info("Stop loss order set successfully",
-				zap.String("symbol", resultOrder.Symbol),
 			)
 		}
 	}

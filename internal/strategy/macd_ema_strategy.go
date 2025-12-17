@@ -249,45 +249,62 @@ func (s *MACDEMAStrategy) generateSignal(timestamp time.Time, currentPrice float
 // checkScenario1 情景一：MACD+EMA组合交叉信号
 func (s *MACDEMAStrategy) checkScenario1(timestamp time.Time, currentPrice float64) *core.TradingSignal {
 	// 1. 检查是否有MACD死叉 + EMA5/VWAP8死叉 → 空单信号
-	if s.hasRecentCross(s.macdCrosses, CrossTypeDeath, 3) &&
-		s.hasRecentCross(s.emaVwapCrosses, CrossTypeDeath, 3) {
-
-		// 生成空单信号
-		signal := NewSignal(core.SignalTypeOpenShort, s.symbol, currentPrice, "MACD死叉+EMA5/VWAP8死叉")
-		signal.Metadata["macd_dif"] = s.prevDIF
-		signal.Metadata["macd_dea"] = s.prevDEA
-		signal.Metadata["ema5"] = s.prevEMA5
-		signal.Metadata["vwap8"] = s.prevVWAP8
-		signal.Metadata["ema15"] = s.prevEMA15
-
-		// 检查是否同时满足EMA5/EMA15死叉（加仓条件）
-		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeDeath, 3) {
-			signal.Metadata["add_position_eligible"] = 1.0
-			signal.Reason = "MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉"
+	if s.hasRecentCross(s.macdCrosses, CrossTypeDeath, 3) {
+		if s.hasRecentCross(s.emaVwapCrosses, CrossTypeDeath, 3) {
+			// 生成空单信号
+			signal := NewSignal(core.SignalTypeOpenShort, s.symbol, currentPrice, "MACD死叉+EMA5/VWAP8死叉")
+			signal.Metadata["macd_dif"] = s.prevDIF
+			signal.Metadata["macd_dea"] = s.prevDEA
+			signal.Metadata["ema5"] = s.prevEMA5
+			signal.Metadata["vwap8"] = s.prevVWAP8
+			signal.Metadata["ema15"] = s.prevEMA15
+			if s.hasRecentCross(s.emaEmaCrosses, CrossTypeDeath, 3) {
+				signal.AddPosition = true
+				signal.Reason = "MACD死叉+EMA5/VWAP8死叉+EMA5/EMA15死叉"
+			}
+			return signal
 		}
+		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeDeath, 3) {
+			signal := NewSignal(core.SignalTypeAddShort, s.symbol, currentPrice, "MACD死叉+EMA5/EMA15死叉")
+			signal.AddPosition = true
+			signal.Metadata["macd_dif"] = s.prevDIF
+			signal.Metadata["macd_dea"] = s.prevDEA
+			signal.Metadata["ema5"] = s.prevEMA5
+			signal.Metadata["vwap8"] = s.prevVWAP8
+			signal.Metadata["ema15"] = s.prevEMA15
+			return signal
 
-		return signal
+		}
 	}
 
 	// 2. 检查是否有MACD金叉 + EMA5/VWAP8金叉 → 多单信号
-	if s.hasRecentCross(s.macdCrosses, CrossTypeGolden, 3) &&
-		s.hasRecentCross(s.emaVwapCrosses, CrossTypeGolden, 3) {
+	if s.hasRecentCross(s.macdCrosses, CrossTypeGolden, 3) {
 
-		// 生成多单信号
-		signal := NewSignal(core.SignalTypeOpenLong, s.symbol, currentPrice, "MACD金叉+EMA5/VWAP8金叉")
-		signal.Metadata["macd_dif"] = s.prevDIF
-		signal.Metadata["macd_dea"] = s.prevDEA
-		signal.Metadata["ema5"] = s.prevEMA5
-		signal.Metadata["vwap8"] = s.prevVWAP8
-		signal.Metadata["ema15"] = s.prevEMA15
-
-		// 检查是否同时满足EMA5/EMA15金叉（加仓条件）
-		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeGolden, 3) {
-			signal.Metadata["add_position_eligible"] = 1.0
-			signal.Reason = "MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉"
+		if s.hasRecentCross(s.emaVwapCrosses, CrossTypeGolden, 3) {
+			// 生成多单信号
+			signal := NewSignal(core.SignalTypeOpenLong, s.symbol, currentPrice, "MACD金叉+EMA5/VWAP8金叉")
+			signal.Metadata["macd_dif"] = s.prevDIF
+			signal.Metadata["macd_dea"] = s.prevDEA
+			signal.Metadata["ema5"] = s.prevEMA5
+			signal.Metadata["vwap8"] = s.prevVWAP8
+			signal.Metadata["ema15"] = s.prevEMA15
+			// 检查是否同时满足EMA5/EMA15金叉（加仓条件）
+			if s.hasRecentCross(s.emaEmaCrosses, CrossTypeGolden, 3) {
+				signal.AddPosition = true
+				signal.Reason = "MACD金叉+EMA5/VWAP8金叉+EMA5/EMA15金叉"
+			}
+			return signal
 		}
-
-		return signal
+		if s.hasRecentCross(s.emaEmaCrosses, CrossTypeGolden, 3) {
+			signal := NewSignal(core.SignalTypeAddLong, s.symbol, currentPrice, "MACD金叉+EMA5/EMA15金叉")
+			signal.Metadata["macd_dif"] = s.prevDIF
+			signal.Metadata["macd_dea"] = s.prevDEA
+			signal.Metadata["ema5"] = s.prevEMA5
+			signal.Metadata["vwap8"] = s.prevVWAP8
+			signal.Metadata["ema15"] = s.prevEMA15
+			signal.AddPosition = true
+			return signal
+		}
 	}
 
 	return NoActionSignal(s.symbol)

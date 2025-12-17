@@ -110,6 +110,7 @@ execution:
     base_url: "https://fapi.binance.com"
     ws_base_url: "wss://fstream.binance.com"
     testnet: false
+    use_ws_order: false  # 是否使用 WebSocket 下单（默认使用 REST API）
 
   # 回测配置
   backtest:
