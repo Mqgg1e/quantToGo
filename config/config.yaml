@@ -105,8 +105,8 @@ execution:
 
   # 币安API配置
   binance:
-    api_key: "UdwTGmKnQ0sFqlOumcBQjc08GGHAMh4rCQX10FfuJTmLgpZFoqBbN1oNyjb28s9z"
-    secret_key: "IvWeC8asG5Pj2eBF8yF2APamO0SuYvAc7USINqDhBeJxu6hv9kuUASbbxTqjKXCi"
+    api_key: ""
+    secret_key: ""
     base_url: "https://testnet.binancefuture.com"  # 测试网/模拟盘
     ws_base_url: "wss://stream.binancefuture.com"
     testnet: true
