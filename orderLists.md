@@ -305,10 +305,3 @@ No margin check before the conditional order gets triggered.
 GTE_GTC orders no longer depend on open orders of the opposite side, but rather on positions only.
 There should be no latency increase in order triggering.
 Modification of untriggered conditional orders is not supported.
-
-自动翻译
-07:07
-https://developers.binance.com/docs/zh-CN/derivatives/change-log
-
-自动翻译
-查看原文

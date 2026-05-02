@@ -12,12 +12,8 @@ Because the original project involved company IP and compliance constraints, thi
 - Sensitive business details are removed.
 - Strategy parameters, risk thresholds, and deployment specifics are not the original production values.
 - Documentation focuses on architecture and implementation approach, not internal operational details.
+- This project is finished with claude, gpt, gemini and other llm models. All parts are manually checked but a double check is still needed if you are gonna use it.
 
-For reviewers/interviewers, this repo is intended to show:
-
-- Go engineering practices (modular structure, scripts, documentation)
-- Typical trading-system pipeline design (market data → signal → execution → risk control)
-- How I approach reliability issues and iterative improvements
 
 ## Current Status (Transparent Version)
 
@@ -34,6 +30,7 @@ This version is suitable for demonstration and technical discussion, but it is *
 - Error handling for some edge cases is incomplete (especially after network jitter/reconnect state transitions).
 - Parts of the documentation and code are not perfectly synchronized.
 - Backtesting, monitoring, and alerting are currently incomplete.
+- The method to place orders doesn't works properly. Some orders like market and limit use order and others use algoOrder.
 
 ### Not Yet Implemented / Planned
 
